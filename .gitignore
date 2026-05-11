@@ -1,0 +1,27 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode (in case you ever open it)
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# App-local debug log
+/tmp/copycauldron.log
+
+# Local notes / agent instructions
+CLAUDE.md
+AGENTS.md
+TODO.md

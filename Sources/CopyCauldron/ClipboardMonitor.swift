@@ -1,0 +1,84 @@
+import Foundation
+import AppKit
+
+@MainActor
+final class ClipboardMonitor {
+    private let store: ClipboardStore
+    private let pasteboard = NSPasteboard.general
+    private var lastChangeCount: Int
+    private var timer: Timer?
+    /// True while we're writing to the pasteboard ourselves (e.g. user clicked an
+    /// item in the popover); skip the next change so we don't re-add it.
+    var suppressNext = false
+
+    init(store: ClipboardStore) {
+        self.store = store
+        self.lastChangeCount = pasteboard.changeCount
+    }
+
+    func start() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.poll() }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func poll() {
+        let current = pasteboard.changeCount
+        guard current != lastChangeCount else { return }
+        lastChangeCount = current
+
+        if suppressNext {
+            suppressNext = false
+            return
+        }
+
+        guard let item = readCurrent() else { return }
+        store.add(item)
+    }
+
+    private func readCurrent() -> ClipboardItem? {
+        // File URLs first — many apps put both file URLs and a text fallback on
+        // the pasteboard; we want to treat it as files.
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            let paths = urls.map { $0.path }
+            return ClipboardItem(content: .fileURLs(paths))
+        }
+
+        // Image
+        if let types = pasteboard.types,
+           types.contains(.tiff) || types.contains(.png) {
+            if let data = pasteboard.data(forType: .png) {
+                let filename = store.saveImage(data, ext: "png")
+                return ClipboardItem(content: .image(filename: filename))
+            }
+            if let tiff = pasteboard.data(forType: .tiff),
+               let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                let filename = store.saveImage(png, ext: "png")
+                return ClipboardItem(content: .image(filename: filename))
+            }
+        }
+
+        // Text — capture RTF/HTML too when present so we can offer rich-text paste.
+        if let s = pasteboard.string(forType: .string), !s.isEmpty {
+            let rtf  = pasteboard.data(forType: .rtf)
+            let html = pasteboard.data(forType: .html)
+            return ClipboardItem(content: .text(s), rtfData: rtf, htmlData: html)
+        }
+
+        return nil
+    }
+
+    /// Refresh the change-count baseline after we wrote to the pasteboard
+    /// ourselves, so the next user copy is detected normally.
+    func resetBaseline() {
+        lastChangeCount = pasteboard.changeCount
+    }
+}
