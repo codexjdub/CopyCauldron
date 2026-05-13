@@ -13,15 +13,20 @@ struct CopyCauldronApp: App {
     }
 }
 
+private final class FloatingPopoverPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
     let store = ClipboardStore()
     let preferences = Preferences()
     private(set) lazy var monitor = ClipboardMonitor(store: store)
     private let hotKeyManager = HotKeyManager()
 
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
+    private var popoverPanel: FloatingPopoverPanel!
     private var hotKeySink: AnyCancellable?
     private var maxPinnedSink: AnyCancellable?
     private var maxHistorySink: AnyCancellable?
@@ -30,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private let hoverOpenDelay: TimeInterval = 0.3
     private var outsideClickMonitor: Any?
     private var resignActiveObserver: NSObjectProtocol?
+    private var frontmostAppObserver: NSObjectProtocol?
     private var previousFrontmostApp: NSRunningApplication?
     private let popoverOpenedSubject = PassthroughSubject<Void, Never>()
     private lazy var preferencesController = PreferencesWindowController(
@@ -49,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         setUpStatusItem()
         setUpPopover()
+        setUpFrontmostAppTracking()
         monitor.start()
         setUpHotKey()
     }
@@ -61,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             button.image = makeStatusItemImage()
             button.action = #selector(statusItemClicked(_:))
             button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
             let view = StatusItemHoverView(frame: button.bounds)
             view.autoresizingMask = [.width, .height]
@@ -104,14 +112,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @objc private func statusItemClicked(_ sender: Any?) {
         // A click should win over a pending hover-open and just toggle.
         cancelPendingHoverOpen()
+        if shouldShowStatusMenu(for: NSApp.currentEvent) {
+            showStatusMenu()
+            return
+        }
         togglePopover()
+    }
+
+    private func shouldShowStatusMenu(for event: NSEvent?) -> Bool {
+        guard let event else { return false }
+        return event.type == .rightMouseUp
+            || (event.type == .leftMouseUp && event.modifierFlags.contains(.control))
+    }
+
+    private func showStatusMenu() {
+        guard let button = statusItem.button else { return }
+        let menu = NSMenu()
+        menu.addItem(
+            withTitle: "Preferences...",
+            action: #selector(statusMenuPreferences),
+            keyEquivalent: ","
+        ).target = self
+        menu.addItem(.separator())
+        menu.addItem(
+            withTitle: "Quit CopyCauldron",
+            action: #selector(statusMenuQuit),
+            keyEquivalent: "q"
+        ).target = self
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
+    }
+
+    @objc private func statusMenuPreferences() {
+        closePopover(respectingPin: true)
+        openPreferences()
+    }
+
+    @objc private func statusMenuQuit() {
+        NSApp.terminate(nil)
     }
 
     // MARK: – Hover-to-open
 
     private func handleMouseEntered() {
         guard preferences.openOnHover else { return }
-        guard !popover.isShown else { return }
+        guard !popoverPanel.isVisible else { return }
         scheduleHoverOpen()
     }
 
@@ -124,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard self.preferences.openOnHover else { return }
-            guard !self.popover.isShown else { return }
+            guard !self.popoverPanel.isVisible else { return }
             self.togglePopover()
         }
         hoverOpenWorkItem = work
@@ -139,39 +183,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: – Popover
 
     private func setUpPopover() {
-        popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
         let initialSize = preferences.popoverSize
-        popover.contentSize = initialSize
-        popover.contentViewController = NSHostingController(
+
+        popoverPanel = FloatingPopoverPanel(
+            contentRect: NSRect(origin: .zero, size: initialSize),
+            styleMask: [.borderless, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        popoverPanel.delegate = self
+        popoverPanel.isMovableByWindowBackground = false
+        popoverPanel.isFloatingPanel = true
+        popoverPanel.level = .floating
+        popoverPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        popoverPanel.hidesOnDeactivate = false
+        popoverPanel.isReleasedWhenClosed = false
+        popoverPanel.isOpaque = false
+        popoverPanel.backgroundColor = .clear
+        popoverPanel.hasShadow = true
+        popoverPanel.minSize = Preferences.minPopoverSize
+        popoverPanel.maxSize = Preferences.maxPopoverSize
+        popoverPanel.setContentSize(initialSize)
+        let hostingController = NSHostingController(
             rootView: PopoverView(
                 store: store,
+                preferences: preferences,
                 onCopy: { [weak self] item, invertPlain in
                     self?.activate(item, invertPlainText: invertPlain)
                 },
-                onQuit: { NSApp.terminate(nil) },
                 onPreferences: { [weak self] in
-                    self?.closePopover()
+                    self?.closePopover(respectingPin: true)
                     self?.openPreferences()
                 },
                 onClose: { [weak self] in
                     self?.closePopover()
                 },
                 initialSize: initialSize,
-                onResize: { [weak self] newSize in
-                    self?.popover.contentSize = newSize
-                },
-                onResizeEnd: { [weak self] finalSize in
-                    self?.preferences.popoverSize = finalSize
-                },
                 popoverOpened: popoverOpenedSubject.eraseToAnyPublisher()
             )
         )
+        hostingController.view.wantsLayer = true
+        hostingController.view.layer?.backgroundColor = NSColor.clear.cgColor
+        popoverPanel.contentViewController = hostingController
+    }
+
+    private func setUpFrontmostAppTracking() {
+        frontmostAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+                    return
+                }
+                self?.rememberExternalFrontmostApp(app)
+            }
+        }
+        if let frontmost = NSWorkspace.shared.frontmostApplication {
+            rememberExternalFrontmostApp(frontmost)
+        }
+    }
+
+    private func rememberExternalFrontmostApp(_ app: NSRunningApplication) {
+        guard app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        previousFrontmostApp = app
     }
 
     private func togglePopover() {
-        if popover.isShown {
+        if popoverPanel.isVisible {
             closePopover()
         } else {
             showPopover()
@@ -179,19 +259,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func showPopover() {
-        guard let button = statusItem.button else { return }
+        guard statusItem.button != nil else { return }
         // Remember which app was frontmost so we can restore focus before pasting.
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        if frontmost?.bundleIdentifier != Bundle.main.bundleIdentifier {
-            previousFrontmostApp = frontmost
+        if let frontmost = NSWorkspace.shared.frontmostApplication {
+            rememberExternalFrontmostApp(frontmost)
         }
         NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popoverPanel.setFrame(preferredPopoverFrame(), display: true)
+        popoverPanel.makeKeyAndOrderFront(nil)
         popoverOpenedSubject.send()
         // Strip the auto-assigned first responder so the search field isn't
         // focused on open — that way 1–9 paste pinned items immediately.
         DispatchQueue.main.async { [weak self] in
-            self?.popover.contentViewController?.view.window?.makeFirstResponder(nil)
+            self?.popoverPanel.makeFirstResponder(nil)
         }
 
         // Backup closers — NSPopover's .transient isn't always reliable.
@@ -199,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.closePopover()
+                self?.closePopover(respectingPin: true)
             }
         }
         resignActiveObserver = NotificationCenter.default.addObserver(
@@ -208,12 +288,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.closePopover()
+                self?.closePopover(respectingPin: true)
             }
         }
     }
 
-    private func closePopover() {
+    private func closePopover(respectingPin: Bool = false) {
+        guard !(respectingPin && preferences.keepPanelOpen) else { return }
         if let m = outsideClickMonitor {
             NSEvent.removeMonitor(m)
             outsideClickMonitor = nil
@@ -222,7 +303,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             NotificationCenter.default.removeObserver(obs)
             resignActiveObserver = nil
         }
-        popover.performClose(nil)
+        if popoverPanel.isVisible {
+            preferences.popoverOrigin = popoverPanel.frame.origin
+        }
+        popoverPanel.orderOut(nil)
+    }
+
+    private func preferredPopoverFrame() -> NSRect {
+        let size = preferences.popoverSize
+        if let origin = preferences.popoverOrigin {
+            return clampedPopoverFrame(NSRect(origin: origin, size: size))
+        }
+        return defaultPopoverFrame(size: size)
+    }
+
+    private func defaultPopoverFrame(size: CGSize) -> NSRect {
+        guard let button = statusItem.button,
+              let window = button.window else {
+            return clampedPopoverFrame(NSRect(origin: .zero, size: size))
+        }
+
+        let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let screen = window.screen ?? screen(containing: buttonFrame) ?? NSScreen.main
+        let visible = (screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero).insetBy(dx: 8, dy: 8)
+        let x = clamped(
+            buttonFrame.midX - size.width / 2,
+            lower: visible.minX,
+            upper: max(visible.minX, visible.maxX - size.width)
+        )
+        let y = clamped(
+            buttonFrame.minY - size.height - 6,
+            lower: visible.minY,
+            upper: max(visible.minY, visible.maxY - size.height)
+        )
+        return NSRect(origin: CGPoint(x: x, y: y), size: size)
+    }
+
+    private func clampedPopoverFrame(_ frame: NSRect) -> NSRect {
+        guard let screen = screen(containing: frame) ?? NSScreen.main else { return frame }
+        let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
+        let width = min(frame.width, visible.width)
+        let height = min(frame.height, visible.height)
+        let x = clamped(
+            frame.minX,
+            lower: visible.minX,
+            upper: max(visible.minX, visible.maxX - width)
+        )
+        let y = clamped(
+            frame.minY,
+            lower: visible.minY,
+            upper: max(visible.minY, visible.maxY - height)
+        )
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func screen(containing frame: NSRect) -> NSScreen? {
+        NSScreen.screens.first { $0.visibleFrame.intersects(frame) }
+    }
+
+    private func clamped(_ value: CGFloat, lower: CGFloat, upper: CGFloat) -> CGFloat {
+        min(max(value, lower), upper)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === popoverPanel,
+              popoverPanel.isVisible else { return }
+        preferences.popoverOrigin = popoverPanel.frame.origin
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === popoverPanel,
+              popoverPanel.isVisible else { return }
+        preferences.popoverSize = popoverPanel.frame.size
+        preferences.popoverOrigin = popoverPanel.frame.origin
     }
 
     // MARK: – Hotkey
@@ -255,7 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func activate(_ item: ClipboardItem, invertPlainText: Bool = false) {
         let plainText = preferences.pastePlainTextOnly != invertPlainText
         let prev = previousFrontmostApp
-        closePopover()
+        if preferences.keepPanelOpen {
+            preferences.popoverOrigin = popoverPanel.frame.origin
+        } else {
+            closePopover()
+        }
         copyToPasteboard(item, plainTextOnly: plainText)
         if preferences.autoPaste {
             if let prev {

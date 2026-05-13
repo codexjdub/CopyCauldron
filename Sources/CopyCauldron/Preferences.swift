@@ -9,6 +9,9 @@ final class Preferences: ObservableObject {
     private let maxPinnedItemsKey = "maxPinnedItems"
     private let popoverWidthKey = "popoverWidth"
     private let popoverHeightKey = "popoverHeight"
+    private let popoverOriginXKey = "popoverOriginX"
+    private let popoverOriginYKey = "popoverOriginY"
+    private let keepPanelOpenKey = "keepPanelOpen"
     private let autoPasteKey = "autoPaste"
     private let pastePlainTextOnlyKey = "pastePlainTextOnly"
     private let maxHistoryItemsKey = "maxHistoryItems"
@@ -16,7 +19,7 @@ final class Preferences: ObservableObject {
     static let pinnedItemsRange = 1...100
     static let defaultMaxHistoryItems = 50
     static let historyItemsRange = 10...500
-    static let historyItemsStep = 10
+    static let historyItemsStep = 1
     static let defaultPopoverSize = CGSize(width: 360, height: 480)
     static let minPopoverSize = CGSize(width: 280, height: 320)
     static let maxPopoverSize = CGSize(width: 700, height: 900)
@@ -50,6 +53,10 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(pastePlainTextOnly, forKey: pastePlainTextOnlyKey) }
     }
 
+    @Published var keepPanelOpen: Bool {
+        didSet { defaults.set(keepPanelOpen, forKey: keepPanelOpenKey) }
+    }
+
     /// Persisted popover size (read at launch, written by drag-to-resize).
     var popoverSize: CGSize {
         get {
@@ -61,6 +68,29 @@ final class Preferences: ObservableObject {
         set {
             defaults.set(newValue.width, forKey: popoverWidthKey)
             defaults.set(newValue.height, forKey: popoverHeightKey)
+        }
+    }
+
+    /// Persisted floating popover position, in screen coordinates.
+    var popoverOrigin: CGPoint? {
+        get {
+            guard defaults.object(forKey: popoverOriginXKey) != nil,
+                  defaults.object(forKey: popoverOriginYKey) != nil else {
+                return nil
+            }
+            return CGPoint(
+                x: defaults.double(forKey: popoverOriginXKey),
+                y: defaults.double(forKey: popoverOriginYKey)
+            )
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: popoverOriginXKey)
+                defaults.removeObject(forKey: popoverOriginYKey)
+                return
+            }
+            defaults.set(newValue.x, forKey: popoverOriginXKey)
+            defaults.set(newValue.y, forKey: popoverOriginYKey)
         }
     }
 
@@ -95,6 +125,7 @@ final class Preferences: ObservableObject {
         self.maxHistoryItems = storedHistoryMax > 0 ? storedHistoryMax : Self.defaultMaxHistoryItems
         self.autoPaste = defaults.bool(forKey: autoPasteKey)
         self.pastePlainTextOnly = defaults.bool(forKey: pastePlainTextOnlyKey)
+        self.keepPanelOpen = defaults.bool(forKey: keepPanelOpenKey)
     }
 
     private func saveHotKey() {

@@ -1,6 +1,6 @@
 # CopyCauldron
 
-A fast, native macOS clipboard manager that lives in your menu bar. Captures text, files, and images; supports pinning, search, keyboard navigation, and one-tap auto-paste.
+A fast, native macOS clipboard manager that lives in your menu bar. Captures text, files, and images; supports pinning, search, drag-out workflows, keyboard navigation, and one-tap auto-paste.
 
 <!-- TODO: add a screenshot of the popover here -->
 <!-- ![CopyCauldron screenshot](docs/screenshot.png) -->
@@ -10,13 +10,16 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 - **Universal capture** — text, file URLs (copied from Finder), and images (e.g. `⌘⌃⇧4` screenshots).
 - **Search** — instant filter across the entire history.
 - **Pinned items** — keep favorites at the top, immune from the history-size cap and the Clear button. Configurable max (default 20).
-- **Keyboard-first** — global hotkey opens the popover, then `↑/↓` to navigate, `Return` to activate, `/` to search, `Esc` to close.
-- **Pin shortcuts** — press `1`–`9` while the popover is open to instantly paste a pinned item.
-- **Auto-paste** — opt-in: the selected item is pasted directly into the previously active app (requires Accessibility permission).
+- **Keyboard-first** — global hotkey opens the panel, then `↑`/`↓` to navigate, `Return` to activate, `p` to pin/unpin, `/` to search, `Esc` to close.
+- **Pin shortcuts** — press `1`–`9` while the panel is open to instantly paste a pinned item.
+- **Floating panel** — move the panel by its top handle, resize it like a normal window, and pin it open when you need repeated access.
+- **Drag out items** — drag text, images, and files from the panel into other apps.
+- **Plain-text mode** — toggle rich text off from the panel footer or Preferences; hold `Shift` while activating an item to temporarily invert the setting.
+- **Auto-paste** — opt-in: the selected item is pasted directly into the target app (requires Accessibility permission). When the panel is pinned, CopyCauldron follows the most recently activated non-CopyCauldron app.
 - **Global hotkey** — customizable; defaults to `⌘⇧V`.
-- **Auto-open on hover** — opt-in: popover opens when you hover the menu-bar icon.
-- **Drag-to-resize** — drag the bottom-right grip; the size persists.
+- **Auto-open on hover** — opt-in: panel opens when you hover the menu-bar icon.
 - **Right-click actions** — Reveal in Finder, Open, Copy path as text (files); Save as…, Open in Preview (images); Open in browser (URLs).
+- **Menu-bar context menu** — right-click the cauldron icon for Preferences or Quit.
 - **Launch at login** — toggle in Preferences.
 - **Local-only** — all history lives on your Mac; nothing is sent anywhere.
 
@@ -62,21 +65,23 @@ To make auto-paste survive rebuilds, sign with a stable self-signed identity (se
 
 | Action | Shortcut |
 |---|---|
-| Open / close popover | `⌘⇧V` (configurable) |
+| Open / close panel | `⌘⇧V` (configurable) |
 | Move selection | `↑` / `↓` |
 | Activate selected item | `Return` |
+| Activate with plain-text mode inverted | `Shift` + `Return` |
+| Pin / unpin selected item | `p` |
 | Paste pinned item *n* | `1`–`9` |
 | Focus search field | `/` |
 | Clear search → unfocus → close | `Esc` |
 
-Click the menu-bar icon to open the popover with the mouse. Click any item to activate it. Right-click for contextual actions.
+Click the menu-bar icon to open the panel with the mouse. Click any item to activate it, or drag items into another app. Use the top handle to move the panel, resize it from the window edge, and use the pin button to keep it open. Right-click items for contextual actions.
 
 ### Preferences
 
-Open via the gear icon in the popover footer.
+Open via the gear icon in the panel footer or by right-clicking the menu-bar icon.
 
 - **Global Shortcut** — record your own combo.
-- **General** — Launch at login, auto-open on hover, auto-paste on selection.
+- **General** — Launch at login, auto-open on hover, auto-paste on selection, always paste as plain text.
 - **History** — total history size (10–500), max pinned items (1–100).
 
 ## Privacy
@@ -84,7 +89,7 @@ Open via the gear icon in the popover footer.
 - Clipboard history is stored locally at `~/Library/Application Support/CopyCauldron/`.
 - Images are cached as PNG files alongside `history.json`.
 - Nothing is sent over the network. No telemetry.
-- See [`TODO.md`](TODO.md) for planned exclusions (password-manager filtering).
+- See [`TODO.md`](TODO.md) for planned sensitive clipboard exclusions.
 
 ## Build notes
 
@@ -93,9 +98,7 @@ Open via the gear icon in the popover footer.
 
 ## Roadmap
 
-See [`TODO.md`](TODO.md) for upcoming items, including:
-
-- Exclude password managers from history (concealed-pasteboard convention).
+See [`TODO.md`](TODO.md) for upcoming items, including sensitive clipboard filtering for password-manager-style concealed or transient pasteboard entries.
 
 ## License
 

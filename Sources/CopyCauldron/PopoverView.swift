@@ -5,20 +5,16 @@ import Carbon.HIToolbox
 
 struct PopoverView: View {
     @ObservedObject var store: ClipboardStore
+    @ObservedObject var preferences: Preferences
     /// Activate an item. `invertPlainText` is true when the user held Shift —
     /// the activator should flip the plain-text-only preference for this paste.
     let onCopy: (ClipboardItem, Bool) -> Void
-    let onQuit: () -> Void
     let onPreferences: () -> Void
     let onClose: () -> Void
     let initialSize: CGSize
-    let onResize: (CGSize) -> Void
-    let onResizeEnd: (CGSize) -> Void
     let popoverOpened: AnyPublisher<Void, Never>
 
     @State private var query: String = ""
-    @State private var size: CGSize
-    @State private var dragStartSize: CGSize?
     @State private var selectedID: UUID?
     @State private var keyMonitor: Any?
     @State private var previewItemID: UUID?
@@ -26,25 +22,20 @@ struct PopoverView: View {
 
     init(
         store: ClipboardStore,
+        preferences: Preferences,
         onCopy: @escaping (ClipboardItem, Bool) -> Void,
-        onQuit: @escaping () -> Void,
         onPreferences: @escaping () -> Void,
         onClose: @escaping () -> Void,
         initialSize: CGSize,
-        onResize: @escaping (CGSize) -> Void,
-        onResizeEnd: @escaping (CGSize) -> Void,
         popoverOpened: AnyPublisher<Void, Never>
     ) {
         self.store = store
+        self.preferences = preferences
         self.onCopy = onCopy
-        self.onQuit = onQuit
         self.onPreferences = onPreferences
         self.onClose = onClose
         self.initialSize = initialSize
-        self.onResize = onResize
-        self.onResizeEnd = onResizeEnd
         self.popoverOpened = popoverOpened
-        _size = State(initialValue: initialSize)
     }
 
     private var filtered: [ClipboardItem] {
@@ -78,6 +69,8 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            WindowChrome(isPinned: $preferences.keepPanelOpen)
+                .frame(height: 18)
             header
             Divider()
             if filtered.isEmpty {
@@ -92,6 +85,7 @@ struct PopoverView: View {
                                     store: store,
                                     shortcutLabel: pinnedShortcuts[item.id],
                                     isSelected: item.id == selectedID,
+                                    plainTextOnly: preferences.pastePlainTextOnly,
                                     onCopy: onCopy,
                                     onLingerHover: { lingeringID in
                                         previewItemID = lingeringID
@@ -114,7 +108,22 @@ struct PopoverView: View {
             Divider()
             footer
         }
-        .frame(width: size.width, height: size.height)
+        .frame(minWidth: Preferences.minPopoverSize.width,
+               idealWidth: initialSize.width,
+               maxWidth: .infinity,
+               minHeight: Preferences.minPopoverSize.height,
+               idealHeight: initialSize.height,
+               maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
         .overlay(alignment: .bottom) {
             if let id = previewItemID,
                let item = store.items.first(where: { $0.id == id }),
@@ -126,35 +135,6 @@ struct PopoverView: View {
                     .transition(.opacity)
                     .allowsHitTesting(false)
             }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            ResizeGrip()
-                .padding(2)
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if dragStartSize == nil { dragStartSize = size }
-                            let start = dragStartSize ?? size
-                            let proposed = CGSize(
-                                width: start.width + value.translation.width,
-                                height: start.height + value.translation.height
-                            )
-                            let clamped = clampSize(proposed)
-                            size = clamped
-                            onResize(clamped)
-                        }
-                        .onEnded { _ in
-                            dragStartSize = nil
-                            onResizeEnd(size)
-                        }
-                )
-                .onHover { hovering in
-                    if hovering {
-                        NSCursor.crosshair.push()
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
         }
         .onAppear {
             selectedID = store.items.first?.id
@@ -289,15 +269,6 @@ struct PopoverView: View {
         }
     }
 
-    private func clampSize(_ s: CGSize) -> CGSize {
-        let minS = Preferences.minPopoverSize
-        let maxS = Preferences.maxPopoverSize
-        return CGSize(
-            width:  min(max(s.width,  minS.width),  maxS.width),
-            height: min(max(s.height, minS.height), maxS.height)
-        )
-    }
-
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -339,6 +310,12 @@ struct PopoverView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
+            Toggle("Plain text", isOn: $preferences.pastePlainTextOnly)
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+                .help(preferences.pastePlainTextOnly
+                      ? "Paste text without rich formatting"
+                      : "Paste rich text when available")
             Button {
                 onPreferences()
             } label: {
@@ -349,8 +326,6 @@ struct PopoverView: View {
             Button("Clear") { store.clear() }
                 .buttonStyle(.borderless)
                 .disabled(store.items.isEmpty)
-            Button("Quit") { onQuit() }
-                .buttonStyle(.borderless)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -382,19 +357,69 @@ private struct HoverPreviewPanel: View {
     }
 }
 
-private struct ResizeGrip: View {
+private struct WindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowDragHandleNSView {
+        WindowDragHandleNSView()
+    }
+
+    func updateNSView(_ nsView: WindowDragHandleNSView, context: Context) {}
+}
+
+private struct WindowChrome: View {
+    @Binding var isPinned: Bool
+
     var body: some View {
-        Canvas { ctx, _ in
-            let color = GraphicsContext.Shading.color(.secondary)
-            var path = Path()
-            // Three diagonal strokes in the bottom-right corner.
-            path.move(to: CGPoint(x: 13, y: 4));  path.addLine(to: CGPoint(x: 4, y: 13))
-            path.move(to: CGPoint(x: 13, y: 8));  path.addLine(to: CGPoint(x: 8, y: 13))
-            path.move(to: CGPoint(x: 13, y: 12)); path.addLine(to: CGPoint(x: 12, y: 13))
-            ctx.stroke(path, with: color, lineWidth: 1.25)
+        ZStack {
+            WindowDragHandle()
+                .frame(width: 90)
+
+            HStack(spacing: 0) {
+                Text("CopyCauldron")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 12)
+                    .frame(width: 120, alignment: .leading)
+
+                Spacer()
+
+                Button {
+                    isPinned.toggle()
+                } label: {
+                    Image(systemName: isPinned ? "pin.fill" : "pin")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isPinned ? .orange : .secondary)
+                        .frame(width: 22, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help(isPinned ? "Panel stays open" : "Keep panel open")
+                .padding(.trailing, 8)
+            }
         }
-        .frame(width: 14, height: 14)
-        .contentShape(Rectangle())
+    }
+}
+
+private final class WindowDragHandleNSView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        let handleSize = NSSize(width: 34, height: 3)
+        let handleRect = NSRect(
+            x: bounds.midX - handleSize.width / 2,
+            y: bounds.midY - handleSize.height / 2,
+            width: handleSize.width,
+            height: handleSize.height
+        )
+        NSColor.secondaryLabelColor.withAlphaComponent(0.45).setFill()
+        NSBezierPath(roundedRect: handleRect, xRadius: 1.5, yRadius: 1.5).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 
@@ -428,6 +453,10 @@ private final class RowDragSourceNSView: NSView, NSDraggingSource {
     private var mouseDownEvent: NSEvent?
     private var dragStarted = false
     private let dragThreshold: CGFloat = 4
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         switch window?.currentEvent?.type ?? NSApp.currentEvent?.type {
@@ -602,6 +631,7 @@ private struct ItemRow: View {
     let store: ClipboardStore
     let shortcutLabel: String?
     let isSelected: Bool
+    let plainTextOnly: Bool
     let onCopy: (ClipboardItem, Bool) -> Void
     /// Called with the item's id when the cursor has lingered on the row long
     /// enough to show a preview, or nil when the cursor leaves.
@@ -697,7 +727,11 @@ private struct ItemRow: View {
     private var dragPayload: RowDragPayload {
         switch item.content {
         case .text(let s):
-            return .text(s, rtfData: item.rtfData, htmlData: item.htmlData)
+            return .text(
+                s,
+                rtfData: plainTextOnly ? nil : item.rtfData,
+                htmlData: plainTextOnly ? nil : item.htmlData
+            )
         case .image(let filename):
             return .image(store.imageURL(for: filename))
         case .fileURLs(let paths):
