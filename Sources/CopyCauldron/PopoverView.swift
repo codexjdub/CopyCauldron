@@ -59,11 +59,12 @@ struct PopoverView: View {
         }
     }
 
-    /// Keys used as pin shortcuts, in order: 1–9, then a–z. 35 total slots.
+    /// Keys used as pinned-item shortcuts. "p" is reserved to toggle the
+    /// selected item's pin state.
     private static let pinShortcutLabels: [String] =
-        (1...9).map(String.init) + "abcdefghijklmnopqrstuvwxyz".map(String.init)
+        (1...9).map(String.init) + "abcdefghijklmnoqrstuvwxyz".map(String.init)
 
-    /// Maps a pinned item's id → its shortcut label ("1"…"9", "a"…"z").
+    /// Maps a pinned item's id to its shortcut label.
     private var pinnedShortcuts: [UUID: String] {
         var map: [UUID: String] = [:]
         var i = 0
@@ -235,9 +236,14 @@ struct PopoverView: View {
             return true
         }
 
-        // Pin shortcuts — only when the search field isn't focused, so typing
-        // those characters into search still works. 1–9 cover the first 9
-        // pinned items; a–z cover pins 10–35.
+        if onlyShiftOrNone, !searchFocused,
+           event.charactersIgnoringModifiers?.lowercased() == "p" {
+            toggleSelectedPin()
+            return true
+        }
+
+        // Pinned-item shortcuts — only when the search field isn't focused, so
+        // typing those characters into search still works.
         if onlyShiftOrNone, !searchFocused,
            let chars = event.charactersIgnoringModifiers?.lowercased(),
            let idx = Self.pinShortcutLabels.firstIndex(of: chars) {
@@ -249,6 +255,14 @@ struct PopoverView: View {
         }
 
         return false
+    }
+
+    private func toggleSelectedPin() {
+        guard let id = selectedID,
+              let item = filtered.first(where: { $0.id == id }) else { return }
+        if !store.togglePin(item) {
+            presentPinLimitAlert(maxPinnedItems: store.maxPinnedItems)
+        }
     }
 
     private func moveSelection(by delta: Int) {
@@ -384,6 +398,205 @@ private struct ResizeGrip: View {
     }
 }
 
+private enum RowDragPayload {
+    case text(String, rtfData: Data?, htmlData: Data?)
+    case image(URL)
+    case fileURLs([URL])
+}
+
+private struct RowDragSourceView: NSViewRepresentable {
+    let payload: RowDragPayload
+    let onClick: (Bool) -> Void
+
+    func makeNSView(context: Context) -> RowDragSourceNSView {
+        let view = RowDragSourceNSView()
+        view.payload = payload
+        view.onClick = onClick
+        return view
+    }
+
+    func updateNSView(_ nsView: RowDragSourceNSView, context: Context) {
+        nsView.payload = payload
+        nsView.onClick = onClick
+    }
+}
+
+private final class RowDragSourceNSView: NSView, NSDraggingSource {
+    var payload: RowDragPayload = .text("", rtfData: nil, htmlData: nil)
+    var onClick: ((Bool) -> Void)?
+
+    private var mouseDownEvent: NSEvent?
+    private var dragStarted = false
+    private let dragThreshold: CGFloat = 4
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        switch window?.currentEvent?.type ?? NSApp.currentEvent?.type {
+        case .leftMouseDown, .leftMouseDragged, .leftMouseUp:
+            return self
+        default:
+            return nil
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownEvent = event
+        dragStarted = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !dragStarted,
+              let mouseDownEvent,
+              dragDistance(from: mouseDownEvent, to: event) >= dragThreshold else { return }
+
+        let items = draggingItems(for: payload)
+        guard !items.isEmpty else { return }
+
+        dragStarted = true
+        beginDraggingSession(with: items, event: mouseDownEvent, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            mouseDownEvent = nil
+            dragStarted = false
+        }
+        guard !dragStarted else { return }
+        onClick?(event.modifierFlags.contains(.shift))
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
+    }
+
+    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool {
+        true
+    }
+
+    private func dragDistance(from startEvent: NSEvent, to currentEvent: NSEvent) -> CGFloat {
+        let start = convert(startEvent.locationInWindow, from: nil)
+        let current = convert(currentEvent.locationInWindow, from: nil)
+        let dx = current.x - start.x
+        let dy = current.y - start.y
+        return hypot(dx, dy)
+    }
+
+    private func draggingItems(for payload: RowDragPayload) -> [NSDraggingItem] {
+        switch payload {
+        case .text(let text, let rtfData, let htmlData):
+            let pasteboardItem = NSPasteboardItem()
+            pasteboardItem.setString(text, forType: .string)
+            if let rtfData {
+                pasteboardItem.setData(rtfData, forType: .rtf)
+            }
+            if let htmlData {
+                pasteboardItem.setData(htmlData, forType: .html)
+            }
+            return [
+                draggingItem(
+                    writer: pasteboardItem,
+                    image: dragImage(systemSymbol: "text.alignleft"),
+                    index: 0,
+                    count: 1
+                )
+            ]
+
+        case .image(let url):
+            let pasteboardItem = NSPasteboardItem()
+            var image = NSImage(contentsOf: url)
+            if let data = try? Data(contentsOf: url) {
+                pasteboardItem.setData(data, forType: .png)
+                if let tiff = image?.tiffRepresentation {
+                    pasteboardItem.setData(tiff, forType: .tiff)
+                }
+            }
+            pasteboardItem.setString(url.absoluteString, forType: .fileURL)
+            return [
+                draggingItem(
+                    writer: pasteboardItem,
+                    image: dragImage(from: &image, fallbackSymbol: "photo"),
+                    index: 0,
+                    count: 1
+                )
+            ]
+
+        case .fileURLs(let urls):
+            let existingURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard !existingURLs.isEmpty else {
+                let pasteboardItem = NSPasteboardItem()
+                pasteboardItem.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+                return [
+                    draggingItem(
+                        writer: pasteboardItem,
+                        image: dragImage(systemSymbol: "doc.on.doc"),
+                        index: 0,
+                        count: 1
+                    )
+                ]
+            }
+            return existingURLs.enumerated().map { index, url in
+                draggingItem(
+                    writer: url as NSURL,
+                    image: dragImage(fileURL: url),
+                    index: index,
+                    count: existingURLs.count
+                )
+            }
+        }
+    }
+
+    private func draggingItem(writer: NSPasteboardWriting,
+                              image: NSImage,
+                              index: Int,
+                              count: Int) -> NSDraggingItem {
+        let item = NSDraggingItem(pasteboardWriter: writer)
+        item.setDraggingFrame(draggingFrame(index: index, count: count), contents: image)
+        return item
+    }
+
+    private func draggingFrame(index: Int, count: Int) -> NSRect {
+        let size = NSSize(width: 32, height: 32)
+        let fallbackPoint = NSPoint(x: bounds.midX, y: bounds.midY)
+        let location = mouseDownEvent.map { convert($0.locationInWindow, from: nil) } ?? fallbackPoint
+        let visibleIndex = min(index, 4)
+        let offset = CGFloat(visibleIndex) * 3
+        return NSRect(
+            x: location.x - size.width / 2 + offset,
+            y: location.y - size.height / 2 - offset,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func dragImage(fileURL: URL) -> NSImage {
+        let image = NSWorkspace.shared.icon(forFile: fileURL.path)
+        image.size = NSSize(width: 32, height: 32)
+        return image
+    }
+
+    private func dragImage(from image: inout NSImage?, fallbackSymbol: String) -> NSImage {
+        guard let image else { return dragImage(systemSymbol: fallbackSymbol) }
+        image.size = NSSize(width: 32, height: 32)
+        return image
+    }
+
+    private func dragImage(systemSymbol: String) -> NSImage {
+        let image = NSImage(systemSymbolName: systemSymbol, accessibilityDescription: nil)
+            ?? NSImage(size: NSSize(width: 32, height: 32))
+        image.size = NSSize(width: 32, height: 32)
+        return image
+    }
+}
+
+private func presentPinLimitAlert(maxPinnedItems: Int) {
+    let alert = NSAlert()
+    alert.messageText = "Pin limit reached"
+    alert.informativeText = "You've hit the maximum number of pinned items (\(maxPinnedItems)). Increase the limit in Preferences or unpin an item first."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
+}
+
 private struct ItemRow: View {
     let item: ClipboardItem
     let store: ClipboardStore
@@ -399,33 +612,11 @@ private struct ItemRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            preview
-                .frame(width: 32, height: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.displayTitle)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(item.timestamp.formatted(.relative(presentation: .named)))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if let label = shortcutLabel {
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.orange.opacity(0.5), lineWidth: 1)
-                    )
-                    .help("Press \(label) to paste")
-            }
+            dragContent
             if hovering || item.isPinned {
                 Button {
                     if !store.togglePin(item) {
-                        showPinLimitAlert()
+                        presentPinLimitAlert(maxPinnedItems: store.maxPinnedItems)
                     }
                 } label: {
                     Image(systemName: item.isPinned ? "pin.fill" : "pin")
@@ -465,15 +656,53 @@ private struct ItemRow: View {
                 onLingerHover(nil)
             }
         }
-        .onTapGesture {
-            // Detect shift on the click. `NSEvent.modifierFlags` reads the
-            // global modifier state directly — more reliable than
-            // `NSApp.currentEvent` which can be stale or nil by the time
-            // SwiftUI dispatches the tap closure.
-            let shiftHeld = NSEvent.modifierFlags.contains(.shift)
-            onCopy(item, shiftHeld)
-        }
         .contextMenu { contextMenuItems }
+    }
+
+    private var dragContent: some View {
+        HStack(spacing: 10) {
+            preview
+                .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(item.timestamp.formatted(.relative(presentation: .named)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let label = shortcutLabel {
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.orange.opacity(0.5), lineWidth: 1)
+                    )
+                    .help("Press \(label) to paste")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .overlay {
+            RowDragSourceView(payload: dragPayload) { shiftHeld in
+                onCopy(item, shiftHeld)
+            }
+        }
+    }
+
+    private var dragPayload: RowDragPayload {
+        switch item.content {
+        case .text(let s):
+            return .text(s, rtfData: item.rtfData, htmlData: item.htmlData)
+        case .image(let filename):
+            return .image(store.imageURL(for: filename))
+        case .fileURLs(let paths):
+            return .fileURLs(paths.map { URL(fileURLWithPath: $0) })
+        }
     }
 
     @ViewBuilder
@@ -581,15 +810,6 @@ private struct ItemRow: View {
         if isSelected { return Color.accentColor.opacity(0.25) }
         if hovering   { return Color.secondary.opacity(0.15) }
         return .clear
-    }
-
-    private func showPinLimitAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Pin limit reached"
-        alert.informativeText = "You've hit the maximum number of pinned items (\(store.maxPinnedItems)). Increase the limit in Preferences or unpin an item first."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
     }
 
     @ViewBuilder

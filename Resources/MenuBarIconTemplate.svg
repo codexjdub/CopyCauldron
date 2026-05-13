@@ -1,13 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" shape-rendering="crispEdges">
-  <g fill="#000">
-    <rect x="14" y="3" width="2" height="3"/>
-    <rect x="13" y="6" width="2" height="3"/>
-    <rect x="12" y="9" width="2" height="2"/>
-    <rect x="5" y="10" width="12" height="2"/>
-    <rect x="4" y="12" width="14" height="2"/>
-    <rect x="4" y="14" width="14" height="2"/>
-    <rect x="5" y="16" width="12" height="2"/>
-    <rect x="6" y="18" width="10" height="1"/>
-    <rect x="7" y="19" width="8" height="1"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+  <g fill="#000" stroke="#000" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17.45 0.75
+             C17.95 0.35 18.95 0.65 19.35 1.45
+             L15.65 10.15
+             L13.75 9.25Z"
+          stroke-width="0"/>
+    <path d="M4.15 10.6
+             C4.15 9.4 5.75 8.85 11 8.85
+             C16.25 8.85 17.85 9.4 17.85 10.6
+             C17.85 11.8 16.25 12.35 11 12.35
+             C5.75 12.35 4.15 11.8 4.15 10.6Z"
+          stroke-width="0"/>
+    <path d="M5 11.1
+             C3.7 12.75 3.6 15.95 4.75 17.65
+             C5.95 19.4 8.05 20.25 11 20.25
+             C13.95 20.25 16.05 19.4 17.25 17.65
+             C18.4 15.95 18.3 12.75 17 11.1
+             C15.3 11.95 6.7 11.95 5 11.1Z"
+          stroke-width="0"/>
   </g>
 </svg>
