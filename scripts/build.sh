@@ -17,14 +17,30 @@ CONTENTS="${APP_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
 
-echo "→ Building Swift package (${CONFIG})..."
-swift build -c "${CONFIG}"
+echo "→ Building Swift package (${CONFIG}) for arm64..."
+swift build -c "${CONFIG}" --arch arm64
+ARM_BIN_PATH=$(swift build -c "${CONFIG}" --arch arm64 --show-bin-path)
+ARM_BIN="${ARM_BIN_PATH}/${APP_NAME}"
 
-BIN_PATH=$(swift build -c "${CONFIG}" --show-bin-path)
-EXEC_BIN="${BIN_PATH}/${APP_NAME}"
+echo "→ Building Swift package (${CONFIG}) for x86_64..."
+swift build -c "${CONFIG}" --arch x86_64
+X86_BIN_PATH=$(swift build -c "${CONFIG}" --arch x86_64 --show-bin-path)
+X86_BIN="${X86_BIN_PATH}/${APP_NAME}"
+
+if [[ ! -x "${ARM_BIN}" || ! -x "${X86_BIN}" ]]; then
+    echo "✗ One of the per-arch binaries is missing"
+    echo "  arm64: ${ARM_BIN} (exists: $(test -x "${ARM_BIN}" && echo yes || echo no))"
+    echo "  x86_64: ${X86_BIN} (exists: $(test -x "${X86_BIN}" && echo yes || echo no))"
+    exit 1
+fi
+
+echo "→ Fusing arm64 + x86_64 into a universal binary..."
+UNIVERSAL_BIN="${BUILD_DIR}/${APP_NAME}-universal"
+lipo -create -output "${UNIVERSAL_BIN}" "${ARM_BIN}" "${X86_BIN}"
+EXEC_BIN="${UNIVERSAL_BIN}"
 
 if [[ ! -x "${EXEC_BIN}" ]]; then
-    echo "✗ Built binary not found at ${EXEC_BIN}"
+    echo "✗ Universal binary not found at ${EXEC_BIN}"
     exit 1
 fi
 
