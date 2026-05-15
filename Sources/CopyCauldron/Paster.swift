@@ -19,7 +19,7 @@ enum Paster {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    /// Posts a synthetic ⌘V to the system after a short delay (so the popover
+    /// Posts a synthetic ⌘V to the system after a short delay (so the panel
     /// has time to close and focus to return to the previous app). Returns
     /// `false` immediately if Accessibility permission is missing.
     @discardableResult

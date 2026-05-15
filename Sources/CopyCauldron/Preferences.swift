@@ -1,5 +1,48 @@
 import Foundation
 import Combine
+import SwiftUI
+
+enum TextSize: String, CaseIterable, Codable, Identifiable {
+    case small
+    case medium
+    case large
+    case extraLarge
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .small:      return "Small"
+        case .medium:     return "Medium"
+        case .large:      return "Large"
+        case .extraLarge: return "XLarge"
+        }
+    }
+
+    /// Multiplier applied to explicit point sizes (and SwiftUI semantic fonts
+    /// rendered via `.system(size:)`) inside the panel. macOS's Dynamic Type
+    /// support is weak, so we scale manually for a visible effect.
+    var scaleFactor: CGFloat {
+        switch self {
+        case .small:      return 0.85
+        case .medium:     return 1.0
+        case .large:      return 1.20
+        case .extraLarge: return 1.50
+        }
+    }
+}
+
+private struct TextScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1.0
+}
+
+extension EnvironmentValues {
+    /// Multiplier the panel applies to explicit font sizes.
+    var textScale: CGFloat {
+        get { self[TextScaleKey.self] }
+        set { self[TextScaleKey.self] = newValue }
+    }
+}
 
 @MainActor
 final class Preferences: ObservableObject {
@@ -7,22 +50,25 @@ final class Preferences: ObservableObject {
     private let hotKeyKey = "hotKey"
     private let openOnHoverKey = "openOnHover"
     private let maxPinnedItemsKey = "maxPinnedItems"
-    private let popoverWidthKey = "popoverWidth"
-    private let popoverHeightKey = "popoverHeight"
-    private let popoverOriginXKey = "popoverOriginX"
-    private let popoverOriginYKey = "popoverOriginY"
+    // Note: these UserDefaults string keys keep their historical names so
+    // existing users don't lose their saved panel size/position.
+    private let panelWidthKey = "popoverWidth"
+    private let panelHeightKey = "popoverHeight"
+    private let panelOriginXKey = "popoverOriginX"
+    private let panelOriginYKey = "popoverOriginY"
     private let keepPanelOpenKey = "keepPanelOpen"
     private let autoPasteKey = "autoPaste"
     private let pastePlainTextOnlyKey = "pastePlainTextOnly"
     private let maxHistoryItemsKey = "maxHistoryItems"
+    private let textSizeKey = "textSize"
     static let defaultMaxPinnedItems = 20
     static let pinnedItemsRange = 1...100
     static let defaultMaxHistoryItems = 50
     static let historyItemsRange = 10...500
     static let historyItemsStep = 1
-    static let defaultPopoverSize = CGSize(width: 360, height: 480)
-    static let minPopoverSize = CGSize(width: 280, height: 320)
-    static let maxPopoverSize = CGSize(width: 700, height: 900)
+    static let defaultPanelSize = CGSize(width: 360, height: 480)
+    static let minPanelSize = CGSize(width: 280, height: 320)
+    static let maxPanelSize = CGSize(width: 700, height: 900)
 
     @Published var hotKey: HotKey {
         didSet { saveHotKey() }
@@ -57,40 +103,44 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(keepPanelOpen, forKey: keepPanelOpenKey) }
     }
 
-    /// Persisted popover size (read at launch, written by drag-to-resize).
-    var popoverSize: CGSize {
+    @Published var textSize: TextSize {
+        didSet { defaults.set(textSize.rawValue, forKey: textSizeKey) }
+    }
+
+    /// Persisted panel size (read at launch, written by drag-to-resize).
+    var panelSize: CGSize {
         get {
-            let w = defaults.double(forKey: popoverWidthKey)
-            let h = defaults.double(forKey: popoverHeightKey)
-            guard w > 0 && h > 0 else { return Self.defaultPopoverSize }
+            let w = defaults.double(forKey: panelWidthKey)
+            let h = defaults.double(forKey: panelHeightKey)
+            guard w > 0 && h > 0 else { return Self.defaultPanelSize }
             return CGSize(width: w, height: h)
         }
         set {
-            defaults.set(newValue.width, forKey: popoverWidthKey)
-            defaults.set(newValue.height, forKey: popoverHeightKey)
+            defaults.set(newValue.width, forKey: panelWidthKey)
+            defaults.set(newValue.height, forKey: panelHeightKey)
         }
     }
 
-    /// Persisted floating popover position, in screen coordinates.
-    var popoverOrigin: CGPoint? {
+    /// Persisted floating panel position, in screen coordinates.
+    var panelOrigin: CGPoint? {
         get {
-            guard defaults.object(forKey: popoverOriginXKey) != nil,
-                  defaults.object(forKey: popoverOriginYKey) != nil else {
+            guard defaults.object(forKey: panelOriginXKey) != nil,
+                  defaults.object(forKey: panelOriginYKey) != nil else {
                 return nil
             }
             return CGPoint(
-                x: defaults.double(forKey: popoverOriginXKey),
-                y: defaults.double(forKey: popoverOriginYKey)
+                x: defaults.double(forKey: panelOriginXKey),
+                y: defaults.double(forKey: panelOriginYKey)
             )
         }
         set {
             guard let newValue else {
-                defaults.removeObject(forKey: popoverOriginXKey)
-                defaults.removeObject(forKey: popoverOriginYKey)
+                defaults.removeObject(forKey: panelOriginXKey)
+                defaults.removeObject(forKey: panelOriginYKey)
                 return
             }
-            defaults.set(newValue.x, forKey: popoverOriginXKey)
-            defaults.set(newValue.y, forKey: popoverOriginYKey)
+            defaults.set(newValue.x, forKey: panelOriginXKey)
+            defaults.set(newValue.y, forKey: panelOriginYKey)
         }
     }
 
@@ -126,6 +176,8 @@ final class Preferences: ObservableObject {
         self.autoPaste = defaults.bool(forKey: autoPasteKey)
         self.pastePlainTextOnly = defaults.bool(forKey: pastePlainTextOnlyKey)
         self.keepPanelOpen = defaults.bool(forKey: keepPanelOpenKey)
+        let storedTextSize = defaults.string(forKey: textSizeKey).flatMap(TextSize.init(rawValue:))
+        self.textSize = storedTextSize ?? .medium
     }
 
     private func saveHotKey() {

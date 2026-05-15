@@ -23,7 +23,7 @@ struct PreferencesView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Auto-open on hover", isOn: $preferences.openOnHover)
                     if preferences.openOnHover {
-                        Text("The popover will open automatically when you hover the menu bar icon. Click outside to dismiss.")
+                        Text("The panel will open automatically when you hover the menu bar icon. Click outside to dismiss.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -34,7 +34,7 @@ struct PreferencesView: View {
                     Toggle("Auto-paste on selection", isOn: $preferences.autoPaste)
                     if preferences.autoPaste {
                         Text(Paster.isTrusted()
-                             ? "Selecting an item will paste it into the previously active app. Press 1–9 in the popover to paste a pinned item."
+                             ? "Selecting an item will paste it into the previously active app. Press 1–9 in the panel to paste a pinned item."
                              : "Auto-paste needs Accessibility permission. Open System Settings → Privacy & Security → Accessibility, enable CopyCauldron, then relaunch.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -50,6 +50,16 @@ struct PreferencesView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                }
+
+                LabeledContent("Text size") {
+                    Picker("", selection: $preferences.textSize) {
+                        ForEach(TextSize.allCases) { size in
+                            Text(size.displayName).tag(size)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 }
             } header: {
                 Text("General")

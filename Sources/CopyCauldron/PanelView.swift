@@ -3,7 +3,7 @@ import AppKit
 import Combine
 import Carbon.HIToolbox
 
-struct PopoverView: View {
+struct PanelView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject var preferences: Preferences
     /// Activate an item. `invertPlainText` is true when the user held Shift —
@@ -12,7 +12,7 @@ struct PopoverView: View {
     let onPreferences: () -> Void
     let onClose: () -> Void
     let initialSize: CGSize
-    let popoverOpened: AnyPublisher<Void, Never>
+    let panelOpened: AnyPublisher<Void, Never>
 
     @State private var query: String = ""
     @State private var selectedID: UUID?
@@ -27,7 +27,7 @@ struct PopoverView: View {
         onPreferences: @escaping () -> Void,
         onClose: @escaping () -> Void,
         initialSize: CGSize,
-        popoverOpened: AnyPublisher<Void, Never>
+        panelOpened: AnyPublisher<Void, Never>
     ) {
         self.store = store
         self.preferences = preferences
@@ -35,7 +35,7 @@ struct PopoverView: View {
         self.onPreferences = onPreferences
         self.onClose = onClose
         self.initialSize = initialSize
-        self.popoverOpened = popoverOpened
+        self.panelOpened = panelOpened
     }
 
     private var filtered: [ClipboardItem] {
@@ -108,16 +108,13 @@ struct PopoverView: View {
             Divider()
             footer
         }
-        .frame(minWidth: Preferences.minPopoverSize.width,
+        .frame(minWidth: Preferences.minPanelSize.width,
                idealWidth: initialSize.width,
                maxWidth: .infinity,
-               minHeight: Preferences.minPopoverSize.height,
+               minHeight: Preferences.minPanelSize.height,
                idealHeight: initialSize.height,
                maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
-        )
+        .background(VisualEffectBackground(material: .sidebar))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -141,7 +138,7 @@ struct PopoverView: View {
             installKeyMonitor()
         }
         .onDisappear { removeKeyMonitor() }
-        .onReceive(popoverOpened) { _ in
+        .onReceive(panelOpened) { _ in
             query = ""
             selectedID = store.items.first?.id
             previewItemID = nil
@@ -160,6 +157,7 @@ struct PopoverView: View {
                 selectedID = filtered.first?.id
             }
         }
+        .environment(\.textScale, preferences.textSize.scaleFactor)
     }
 
     // MARK: – Keyboard navigation
@@ -275,6 +273,7 @@ struct PopoverView: View {
                 .foregroundStyle(.secondary)
             TextField("Search clipboard", text: $query)
                 .textFieldStyle(.plain)
+                .font(.system(size: 13 * preferences.textSize.scaleFactor))
                 .focused($searchFocused)
             if !searchFocused {
                 Text("/")
@@ -299,6 +298,7 @@ struct PopoverView: View {
                 .font(.system(size: 32))
                 .foregroundStyle(.secondary)
             Text(store.items.isEmpty ? "No clipboard history yet" : "No matches")
+                .font(.system(size: 13 * preferences.textSize.scaleFactor))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -307,15 +307,39 @@ struct PopoverView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             Text("\(store.items.count) item\(store.items.count == 1 ? "" : "s")")
-                .font(.caption)
+                .font(.system(size: 11 * preferences.textSize.scaleFactor))
                 .foregroundStyle(.secondary)
             Spacer()
-            Toggle("Plain text", isOn: $preferences.pastePlainTextOnly)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
-                .help(preferences.pastePlainTextOnly
-                      ? "Paste text without rich formatting"
-                      : "Paste rich text when available")
+            Button {
+                preferences.pastePlainTextOnly.toggle()
+            } label: {
+                Text("Plain")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(preferences.pastePlainTextOnly
+                                  ? Color.accentColor
+                                  : Color.clear)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(
+                                preferences.pastePlainTextOnly
+                                    ? Color.clear
+                                    : Color.secondary.opacity(0.5),
+                                lineWidth: 1
+                            )
+                    )
+                    .foregroundStyle(
+                        preferences.pastePlainTextOnly ? Color.white : Color.primary
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(preferences.pastePlainTextOnly
+                  ? "Plain-text paste is ON — strips rich formatting. Click to allow rich text."
+                  : "Plain-text paste is OFF — rich text preserved. Click to strip formatting.")
             Button {
                 onPreferences()
             } label: {
@@ -332,13 +356,37 @@ struct PopoverView: View {
     }
 }
 
+/// Wraps `NSVisualEffectView` for use as a SwiftUI background. Produces the
+/// translucent "frosted glass" look used by Spotlight, Notification Center, etc.
+private struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    var state: NSVisualEffectView.State = .active
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = state
+        view.isEmphasized = false
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = state
+    }
+}
+
 private struct HoverPreviewPanel: View {
     let text: String
+    @Environment(\.textScale) private var textScale: CGFloat
 
     var body: some View {
         ScrollView {
             Text(text)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11 * textScale, design: .monospaced))
                 .foregroundStyle(.primary)
                 .textSelection(.disabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -639,6 +687,7 @@ private struct ItemRow: View {
 
     @State private var hovering = false
     @State private var lingerWorkItem: DispatchWorkItem?
+    @Environment(\.textScale) private var textScale: CGFloat
 
     var body: some View {
         HStack(spacing: 10) {
@@ -695,10 +744,11 @@ private struct ItemRow: View {
                 .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayTitle)
+                    .font(.system(size: 13 * textScale))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(item.timestamp.formatted(.relative(presentation: .named)))
-                    .font(.caption)
+                    .font(.system(size: 11 * textScale))
                     .foregroundStyle(.secondary)
             }
             Spacer()
