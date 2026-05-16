@@ -61,6 +61,11 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// doesn't allocate a fresh lowercased copy of every item's content.
     /// Not persisted — recomputed on every load.
     let lowercasedSearchableText: String
+    /// Pre-computed display title for the row (≤80 chars, single-line).
+    /// Computed once at construction so huge text items don't re-trim and
+    /// re-replace-occurrences inside the SwiftUI body on every render.
+    /// Not persisted — recomputed on every load.
+    let displayTitle: String
     /// Bookmark data per file URL (one entry per path in `.fileURLs(_)`).
     /// Persisted via SQLite (not JSON) so we can survive renames and moves
     /// — `URL.bookmarkData()` tracks files by inode, not path. `nil` for
@@ -89,6 +94,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.fileURLBookmarks = fileURLBookmarks
         self.textKind = Self.computeKind(from: content)
         self.lowercasedSearchableText = Self.computeSearchableText(from: content)
+        self.displayTitle = Self.computeDisplayTitle(from: content)
     }
 
     private static func computeKind(from content: ClipboardContent) -> TextKind {
@@ -101,6 +107,26 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         case .text(let s):       return s.lowercased()
         case .image:             return "image"
         case .fileURLs(let ps):  return ps.joined(separator: " ").lowercased()
+        }
+    }
+
+    private static func computeDisplayTitle(from content: ClipboardContent) -> String {
+        switch content {
+        case .text(let s):
+            // Bound the work up front so huge text items don't pay
+            // 30MB×2 of trim/replace allocation just to produce 80 chars.
+            // 500-char prefix is plenty of headroom after whitespace trim.
+            let bounded = String(s.prefix(500))
+            let trimmed = bounded.trimmingCharacters(in: .whitespacesAndNewlines)
+            let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+            return oneLine.isEmpty ? "(empty)" : String(oneLine.prefix(80))
+        case .image:
+            return "Image"
+        case .fileURLs(let paths):
+            if paths.count == 1 {
+                return (paths[0] as NSString).lastPathComponent
+            }
+            return "\(paths.count) files"
         }
     }
 
@@ -130,6 +156,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.fileURLBookmarks = nil
         self.textKind = Self.computeKind(from: self.content)
         self.lowercasedSearchableText = Self.computeSearchableText(from: self.content)
+        self.displayTitle = Self.computeDisplayTitle(from: self.content)
     }
 
     // Explicit encode: `textKind` is derived from `content`, so we don't write
@@ -144,22 +171,6 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         try c.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
         try c.encodeIfPresent(rtfData, forKey: .rtfData)
         try c.encodeIfPresent(htmlData, forKey: .htmlData)
-    }
-
-    var displayTitle: String {
-        switch content {
-        case .text(let s):
-            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
-            return oneLine.isEmpty ? "(empty)" : String(oneLine.prefix(80))
-        case .image:
-            return "Image"
-        case .fileURLs(let paths):
-            if paths.count == 1 {
-                return (paths[0] as NSString).lastPathComponent
-            }
-            return "\(paths.count) files"
-        }
     }
 
     var iconSystemName: String {
