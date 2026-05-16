@@ -54,6 +54,12 @@ final class HistoryDatabase {
 
     /// Subscribes to changes and invokes `onChange` (on the main queue) with
     /// the full, display-ordered items list whenever the table mutates.
+    ///
+    /// Uses `.immediate` scheduling so the initial fetch runs synchronously
+    /// on the caller (which must be the main thread) — otherwise the panel
+    /// flashes empty for a few ms after launch if the user opens it before
+    /// GRDB delivers the first async value. Subsequent changes still arrive
+    /// on the main queue.
     func observeItems(
         onError: @escaping @Sendable (Error) -> Void,
         onChange: @escaping @Sendable ([ClipboardItem]) -> Void
@@ -63,7 +69,7 @@ final class HistoryDatabase {
         }
         return observation.start(
             in: dbPool,
-            scheduling: .async(onQueue: .main),
+            scheduling: .immediate,
             onError: onError,
             onChange: onChange
         )
