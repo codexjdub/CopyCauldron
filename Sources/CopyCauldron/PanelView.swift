@@ -100,8 +100,11 @@ struct PanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            WindowChrome(isPinned: $preferences.keepPanelOpen)
-                .frame(height: 18)
+            WindowChrome(
+                isPinned: $preferences.keepPanelOpen,
+                onClose: onClose
+            )
+            .frame(height: 18)
             header
             Divider()
             if filtered.isEmpty {
@@ -440,6 +443,7 @@ private struct WindowDragHandle: NSViewRepresentable {
 
 private struct WindowChrome: View {
     @Binding var isPinned: Bool
+    let onClose: () -> Void
 
     var body: some View {
         ZStack {
@@ -465,7 +469,20 @@ private struct WindowChrome: View {
                         .frame(width: 22, height: 18)
                 }
                 .buttonStyle(.plain)
-                .help(isPinned ? "Panel stays open" : "Keep panel open")
+                .help(isPinned
+                      ? "Floating above other windows — click to make it a regular window"
+                      : "Click to float above other windows")
+
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("Close panel")
                 .padding(.trailing, 8)
             }
         }

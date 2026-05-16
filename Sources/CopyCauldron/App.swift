@@ -31,11 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var maxPinnedSink: AnyCancellable?
     private var maxHistorySink: AnyCancellable?
     private var retentionSink: AnyCancellable?
+    private var keepPanelOpenSink: AnyCancellable?
     private var hoverView: StatusItemHoverView?
     private var hoverOpenWorkItem: DispatchWorkItem?
     private let hoverOpenDelay: TimeInterval = 0.3
-    private var outsideClickMonitor: Any?
-    private var resignActiveObserver: NSObjectProtocol?
     private var frontmostAppObserver: NSObjectProtocol?
     private var previousFrontmostApp: NSRunningApplication?
     private let panelOpenedSubject = PassthroughSubject<Void, Never>()
@@ -64,6 +63,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         setUpFrontmostAppTracking()
         monitor.start()
         setUpHotKey()
+        // Re-apply pin state whenever the user toggles it via the chrome.
+        // `dropFirst()` skips the initial emission — `setUpPanel` already
+        // applied the persisted value once during creation.
+        keepPanelOpenSink = preferences.$keepPanelOpen
+            .dropFirst()
+            .sink { [weak self] pinned in
+                self?.applyPinState(pinned)
+            }
     }
 
     // MARK: – Status item
@@ -149,7 +156,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     @objc private func statusMenuPreferences() {
-        closePanel(respectingPin: true)
         openPreferences()
     }
 
@@ -199,8 +205,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         )
         panel.delegate = self
         panel.isMovableByWindowBackground = false
-        panel.isFloatingPanel = true
-        panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
@@ -210,6 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         panel.minSize = Preferences.minPanelSize
         panel.maxSize = Preferences.maxPanelSize
         panel.setContentSize(initialSize)
+        // Pin state determines whether we float above other windows or sit at
+        // normal level (where the user can click another window and have it
+        // come forward over us). Applied here and again from
+        // `keepPanelOpenSink` when the user toggles the chrome's pin button.
+        applyPinState(preferences.keepPanelOpen)
         let hostingController = NSHostingController(
             rootView: PanelView(
                 store: store,
@@ -218,7 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     self?.activate(item, invertPlainText: invertPlain)
                 },
                 onPreferences: { [weak self] in
-                    self?.closePanel(respectingPin: true)
+                    // Panel never auto-closes in the new behavior — leave
+                    // it open and just bring Preferences forward.
                     self?.openPreferences()
                 },
                 onClose: { [weak self] in
@@ -256,11 +266,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         previousFrontmostApp = app
     }
 
+    /// Three-state toggle: hidden → show; visible-but-behind → raise; visible
+    /// and key → close. Used by the menu-bar icon and the global hotkey.
     private func togglePanel() {
-        if panel.isVisible {
-            closePanel()
-        } else {
+        if !panel.isVisible {
             showPanel()
+        } else if !panel.isKeyWindow {
+            // Panel is on screen but another window came forward; the user
+            // is asking for it back, so raise and key it.
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            closePanel()
         }
     }
 
@@ -279,40 +296,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         DispatchQueue.main.async { [weak self] in
             self?.panel.makeFirstResponder(nil)
         }
-
-        // Backup closers — the panel's transient-like dismiss isn't always reliable.
-        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.closePanel(respectingPin: true)
-            }
-        }
-        resignActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.closePanel(respectingPin: true)
-            }
-        }
+        // No outside-click or resign-active dismissal: the panel persists
+        // until Esc / close button / menu-bar toggle. When pin is off the
+        // panel naturally goes behind whatever the user clicks on next.
     }
 
-    private func closePanel(respectingPin: Bool = false) {
-        guard !(respectingPin && preferences.keepPanelOpen) else { return }
-        if let m = outsideClickMonitor {
-            NSEvent.removeMonitor(m)
-            outsideClickMonitor = nil
-        }
-        if let obs = resignActiveObserver {
-            NotificationCenter.default.removeObserver(obs)
-            resignActiveObserver = nil
-        }
+    private func closePanel() {
         if panel.isVisible {
             preferences.panelOrigin = panel.frame.origin
         }
         panel.orderOut(nil)
+    }
+
+    /// Applies the pin state to the panel: `true` → floating above other
+    /// windows; `false` → normal-level window that yields to other apps.
+    /// Safe to call multiple times — both properties are idempotent.
+    private func applyPinState(_ pinned: Bool) {
+        panel.isFloatingPanel = pinned
+        panel.level = pinned ? .floating : .normal
     }
 
     private func preferredPanelFrame() -> NSRect {
@@ -416,11 +417,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private func activate(_ item: ClipboardItem, invertPlainText: Bool = false) {
         let plainText = preferences.pastePlainTextOnly != invertPlainText
         let prev = previousFrontmostApp
-        if preferences.keepPanelOpen {
-            preferences.panelOrigin = panel.frame.origin
-        } else {
-            closePanel()
-        }
+        // Panel stays open in both pin states now. When pin is off the
+        // target app's activation below brings it forward over the panel;
+        // when pin is on the panel keeps floating above.
+        preferences.panelOrigin = panel.frame.origin
         copyToPasteboard(item, plainTextOnly: plainText)
         if preferences.autoPaste {
             if let prev {
