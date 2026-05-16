@@ -77,7 +77,33 @@ final class ClipboardStore: ObservableObject {
             }
         )
 
+        cleanOrphanImages()
         startTTLSweepTimer()
+    }
+
+    // MARK: – Orphan-image cleanup
+
+    /// Deletes `.png` files in `imagesDir` that aren't referenced by any
+    /// item in the database. Covers two rare cases:
+    /// 1. The app crashed between `saveImage` writing the file and the DB
+    ///    INSERT in `add()`.
+    /// 2. `cleanup(_:)` silently failed to delete a file on item removal
+    ///    (we use `try?` there to avoid disrupting the user-visible flow).
+    private func cleanOrphanImages() {
+        do {
+            let referenced = Set(try database.allImageFilenames())
+            let fm = FileManager.default
+            let files = try fm.contentsOfDirectory(
+                at: imagesDir,
+                includingPropertiesForKeys: nil
+            )
+            for file in files {
+                guard !referenced.contains(file.lastPathComponent) else { continue }
+                try? fm.removeItem(at: file)
+            }
+        } catch {
+            NSLog("CopyCauldron: orphan image cleanup failed: \(error)")
+        }
     }
 
     // MARK: – TTL sweep

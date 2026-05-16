@@ -174,6 +174,18 @@ final class HistoryDatabase {
         }
     }
 
+    /// Every `image_filename` currently referenced by an item — used by the
+    /// startup orphan-image sweep to figure out which `.png` files on disk
+    /// no longer have a row pointing at them.
+    func allImageFilenames() throws -> [String] {
+        try dbPool.read { db in
+            let records = try Record
+                .filter(Column("content_kind") == "image")
+                .fetchAll(db)
+            return records.compactMap(\.imageFilename)
+        }
+    }
+
     /// True when the most recent unpinned item has the same content — used by
     /// `ClipboardStore.add` to dedupe consecutive identical copies.
     func mostRecentUnpinnedMatches(_ item: ClipboardItem) throws -> Bool {
