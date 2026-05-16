@@ -56,6 +56,11 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// (the detector is expensive: it instantiates `NSDataDetector` and runs
     /// several regexes). Not persisted — recomputed on every load.
     let textKind: TextKind
+    /// Pre-lowercased searchable form used by `PanelView`'s filter. Computed
+    /// once at construction time so each keystroke in the search field
+    /// doesn't allocate a fresh lowercased copy of every item's content.
+    /// Not persisted — recomputed on every load.
+    let lowercasedSearchableText: String
 
     init(
         id: UUID = UUID(),
@@ -74,11 +79,20 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.rtfData = rtfData
         self.htmlData = htmlData
         self.textKind = Self.computeKind(from: content)
+        self.lowercasedSearchableText = Self.computeSearchableText(from: content)
     }
 
     private static func computeKind(from content: ClipboardContent) -> TextKind {
         if case .text(let s) = content { return TextKind.detect(in: s) }
         return .plain
+    }
+
+    private static func computeSearchableText(from content: ClipboardContent) -> String {
+        switch content {
+        case .text(let s):       return s.lowercased()
+        case .image:             return "image"
+        case .fileURLs(let ps):  return ps.joined(separator: " ").lowercased()
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -102,6 +116,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.rtfData = try? c.decode(Data.self, forKey: .rtfData)
         self.htmlData = try? c.decode(Data.self, forKey: .htmlData)
         self.textKind = Self.computeKind(from: self.content)
+        self.lowercasedSearchableText = Self.computeSearchableText(from: self.content)
     }
 
     // Explicit encode: `textKind` is derived from `content`, so we don't write

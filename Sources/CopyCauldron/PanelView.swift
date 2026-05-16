@@ -20,6 +20,13 @@ struct PanelView: View {
     @State private var previewItemID: UUID?
     @FocusState private var searchFocused: Bool
 
+    /// Cached filter result. Recomputed only when `query` or `store.items`
+    /// change — previously this was a computed property on the view, which
+    /// re-ran on every body re-evaluation (selection, hover, scroll, etc.).
+    @State private var filtered: [ClipboardItem] = []
+    /// Cached pinned-item shortcut map. Same reasoning.
+    @State private var pinnedShortcuts: [UUID: String] = [:]
+
     init(
         store: ClipboardStore,
         preferences: Preferences,
@@ -36,18 +43,10 @@ struct PanelView: View {
         self.onClose = onClose
         self.initialSize = initialSize
         self.panelOpened = panelOpened
-    }
-
-    private var filtered: [ClipboardItem] {
-        guard !query.isEmpty else { return store.items }
-        let q = query.lowercased()
-        return store.items.filter { item in
-            switch item.content {
-            case .text(let s):       return s.lowercased().contains(q)
-            case .image:             return "image".contains(q)
-            case .fileURLs(let ps):  return ps.contains { $0.lowercased().contains(q) }
-            }
-        }
+        // Seed the @State caches from the current store snapshot so the first
+        // render doesn't flash an empty list before the observers fire.
+        _filtered = State(initialValue: Self.computeFiltered(items: store.items, query: ""))
+        _pinnedShortcuts = State(initialValue: Self.computePinnedShortcuts(for: store.items))
     }
 
     /// Keys used as pinned-item shortcuts. "p" is reserved to toggle the
@@ -55,16 +54,44 @@ struct PanelView: View {
     private static let pinShortcutLabels: [String] =
         (1...9).map(String.init) + "abcdefghijklmnoqrstuvwxyz".map(String.init)
 
-    /// Maps a pinned item's id to its shortcut label.
-    private var pinnedShortcuts: [UUID: String] {
+    private static func computeFiltered(
+        items: [ClipboardItem], query: String
+    ) -> [ClipboardItem] {
+        guard !query.isEmpty else { return items }
+        let q = query.lowercased()
+        // `lowercasedSearchableText` is precomputed on ClipboardItem at
+        // construction time — no per-item allocation here.
+        return items.filter { $0.lowercasedSearchableText.contains(q) }
+    }
+
+    private static func computePinnedShortcuts(
+        for items: [ClipboardItem]
+    ) -> [UUID: String] {
         var map: [UUID: String] = [:]
         var i = 0
-        for item in store.items where item.isPinned {
-            guard i < Self.pinShortcutLabels.count else { break }
-            map[item.id] = Self.pinShortcutLabels[i]
+        for item in items where item.isPinned {
+            guard i < pinShortcutLabels.count else { break }
+            map[item.id] = pinShortcutLabels[i]
             i += 1
         }
         return map
+    }
+
+    private func handleItemsChange() {
+        filtered = Self.computeFiltered(items: store.items, query: query)
+        pinnedShortcuts = Self.computePinnedShortcuts(for: store.items)
+        ensureValidSelection()
+    }
+
+    private func handleQueryChange() {
+        filtered = Self.computeFiltered(items: store.items, query: query)
+        ensureValidSelection()
+    }
+
+    private func ensureValidSelection() {
+        if selectedID == nil || !filtered.contains(where: { $0.id == selectedID }) {
+            selectedID = filtered.first?.id
+        }
     }
 
     var body: some View {
@@ -146,17 +173,11 @@ struct PanelView: View {
             // Press / to focus the search field.
             searchFocused = false
         }
-        .onChange(of: query) { _ in
-            // Keep selection valid after filtering.
-            if selectedID == nil || !filtered.contains(where: { $0.id == selectedID }) {
-                selectedID = filtered.first?.id
-            }
-        }
-        .onChange(of: store.items.map(\.id)) { _ in
-            if selectedID == nil || !filtered.contains(where: { $0.id == selectedID }) {
-                selectedID = filtered.first?.id
-            }
-        }
+        // Recompute `filtered`/`pinnedShortcuts` only when their inputs change
+        // — not on every body re-evaluation as the computed-property version
+        // did.
+        .onReceive(store.$items) { _ in handleItemsChange() }
+        .onChange(of: query) { _ in handleQueryChange() }
         .environment(\.textScale, preferences.textSize.scaleFactor)
     }
 
