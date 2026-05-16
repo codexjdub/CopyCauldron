@@ -22,10 +22,21 @@ final class ClipboardStore: ObservableObject {
     /// Cap on how many items the user can pin. Settable from Preferences.
     var maxPinnedItems: Int = Preferences.defaultMaxPinnedItems
 
+    /// TTL window for the periodic sweep. `.off` disables expiry. Settable
+    /// from Preferences; assigning a new value triggers an immediate sweep
+    /// so shortening the window evicts now-stale items right away.
+    var retentionPeriod: RetentionPeriod = .off {
+        didSet {
+            guard retentionPeriod != oldValue else { return }
+            sweepExpiredItems()
+        }
+    }
+
     private let supportDir: URL
     private let imagesDir: URL
     private let database: HistoryDatabase
     private var observationCancellable: AnyDatabaseCancellable?
+    private var ttlSweepTimer: Timer?
 
     init() {
         let fm = FileManager.default
@@ -65,6 +76,33 @@ final class ClipboardStore: ObservableObject {
                 }
             }
         )
+
+        startTTLSweepTimer()
+    }
+
+    // MARK: – TTL sweep
+
+    /// Evicts unpinned items older than the current retention window.
+    /// No-op when `retentionPeriod == .off`. Pinned items are never expired.
+    private func sweepExpiredItems() {
+        guard let retentionSeconds = retentionPeriod.seconds else { return }
+        let cutoff = Date().addingTimeInterval(-retentionSeconds)
+        do {
+            let evicted = try database.evictExpired(olderThan: cutoff)
+            for item in evicted { cleanup(item) }
+        } catch {
+            NSLog("CopyCauldron: TTL sweep failed: \(error)")
+        }
+    }
+
+    /// Fires the sweep every 60 minutes. The timer is always-on (cheap to
+    /// fire and no-op when `retentionPeriod == .off`); we don't bother
+    /// starting/stopping it as the setting toggles.
+    private func startTTLSweepTimer() {
+        ttlSweepTimer?.invalidate()
+        ttlSweepTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.sweepExpiredItems() }
+        }
     }
 
     // MARK: – Mutations

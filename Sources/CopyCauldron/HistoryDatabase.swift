@@ -126,6 +126,22 @@ final class HistoryDatabase {
         }
     }
 
+    /// Deletes unpinned items older than `cutoff` (TTL sweep). Returns the
+    /// evicted items so the caller can clean up image files.
+    @discardableResult
+    func evictExpired(olderThan cutoff: Date) throws -> [ClipboardItem] {
+        try dbPool.write { db in
+            let toRemove = try Record
+                .filter(Column("is_pinned") == false)
+                .filter(Column("timestamp") < cutoff)
+                .fetchAll(db)
+            for record in toRemove {
+                try record.delete(db)
+            }
+            return toRemove.map(Self.fromRecord)
+        }
+    }
+
     /// Drops unpinned items past the configured history cap, oldest first.
     /// Returns the evicted items so the caller can clean up image files.
     @discardableResult

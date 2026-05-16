@@ -2,6 +2,35 @@ import Foundation
 import Combine
 import SwiftUI
 
+enum RetentionPeriod: String, CaseIterable, Codable, Identifiable {
+    case off
+    case oneHour
+    case twentyFourHours
+    case sevenDays
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off:              return "Off"
+        case .oneHour:          return "1 hour"
+        case .twentyFourHours:  return "24 hours"
+        case .sevenDays:        return "7 days"
+        }
+    }
+
+    /// How long an unpinned item lives before the TTL sweep evicts it.
+    /// `nil` means "never expire" (the `off` case).
+    var seconds: TimeInterval? {
+        switch self {
+        case .off:              return nil
+        case .oneHour:          return 3600
+        case .twentyFourHours:  return 86_400
+        case .sevenDays:        return 604_800
+        }
+    }
+}
+
 enum TextSize: String, CaseIterable, Codable, Identifiable {
     case small
     case medium
@@ -61,6 +90,7 @@ final class Preferences: ObservableObject {
     private let pastePlainTextOnlyKey = "pastePlainTextOnly"
     private let maxHistoryItemsKey = "maxHistoryItems"
     private let textSizeKey = "textSize"
+    private let retentionPeriodKey = "retentionPeriod"
     static let defaultMaxPinnedItems = 20
     static let pinnedItemsRange = 1...100
     static let defaultMaxHistoryItems = 50
@@ -105,6 +135,10 @@ final class Preferences: ObservableObject {
 
     @Published var textSize: TextSize {
         didSet { defaults.set(textSize.rawValue, forKey: textSizeKey) }
+    }
+
+    @Published var retentionPeriod: RetentionPeriod {
+        didSet { defaults.set(retentionPeriod.rawValue, forKey: retentionPeriodKey) }
     }
 
     /// Persisted panel size (read at launch, written by drag-to-resize).
@@ -178,6 +212,8 @@ final class Preferences: ObservableObject {
         self.keepPanelOpen = defaults.bool(forKey: keepPanelOpenKey)
         let storedTextSize = defaults.string(forKey: textSizeKey).flatMap(TextSize.init(rawValue:))
         self.textSize = storedTextSize ?? .medium
+        let storedRetention = defaults.string(forKey: retentionPeriodKey).flatMap(RetentionPeriod.init(rawValue:))
+        self.retentionPeriod = storedRetention ?? .off
     }
 
     private func saveHotKey() {

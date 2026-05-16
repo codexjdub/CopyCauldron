@@ -76,10 +76,15 @@ struct PreferencesView: View {
                     value: $preferences.maxPinnedItems,
                     in: Preferences.pinnedItemsRange
                 )
+                Picker("Auto-expire after", selection: $preferences.retentionPeriod) {
+                    ForEach(RetentionPeriod.allCases) { period in
+                        Text(period.displayName).tag(period)
+                    }
+                }
             } header: {
                 Text("History")
             } footer: {
-                Text("Pinned items are kept across the history limit and survive Clear.")
+                Text("Pinned items are kept across the history limit, survive Clear, and are never auto-expired.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var hotKeySink: AnyCancellable?
     private var maxPinnedSink: AnyCancellable?
     private var maxHistorySink: AnyCancellable?
+    private var retentionSink: AnyCancellable?
     private var hoverView: StatusItemHoverView?
     private var hoverOpenWorkItem: DispatchWorkItem?
     private let hoverOpenDelay: TimeInterval = 0.3
@@ -45,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     func applicationDidFinishLaunching(_ notification: Notification) {
         store.maxPinnedItems = preferences.maxPinnedItems
         store.maxHistoryItems = preferences.maxHistoryItems
+        store.retentionPeriod = preferences.retentionPeriod
         maxPinnedSink = preferences.$maxPinnedItems
             .sink { [weak self] new in
                 self?.store.maxPinnedItems = new
@@ -52,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         maxHistorySink = preferences.$maxHistoryItems
             .sink { [weak self] new in
                 self?.store.maxHistoryItems = new
+            }
+        retentionSink = preferences.$retentionPeriod
+            .sink { [weak self] new in
+                self?.store.retentionPeriod = new
             }
         setUpStatusItem()
         setUpPanel()
