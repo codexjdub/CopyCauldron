@@ -11,6 +11,13 @@ final class ClipboardMonitor {
     /// item in the panel); skip the next change so we don't re-add it.
     var suppressNext = false
 
+    /// Pasteboard poll cadence. macOS has no clipboard-change notification, so
+    /// we poll `changeCount`. 1.0s matches Maccy/Pastebot and halves the
+    /// timer rate vs the previous 500ms; worst-case latency between a copy
+    /// and the item appearing in the panel is ~1s, which is below the time
+    /// it takes a user to actually open the panel.
+    private static let pollInterval: TimeInterval = 1.0
+
     init(store: ClipboardStore) {
         self.store = store
         self.lastChangeCount = pasteboard.changeCount
@@ -18,7 +25,7 @@ final class ClipboardMonitor {
 
     func start() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
     }
