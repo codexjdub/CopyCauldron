@@ -77,9 +77,13 @@ struct PanelView: View {
         return map
     }
 
-    private func handleItemsChange() {
-        filtered = Self.computeFiltered(items: store.items, query: query)
-        pinnedShortcuts = Self.computePinnedShortcuts(for: store.items)
+    private func handleItemsChange(items: [ClipboardItem]) {
+        // `items` comes from the `.onReceive(store.$items)` parameter — not
+        // `store.items` — because `@Published` emits in `willSet`, *before*
+        // the property is written. Reading `store.items` here would see the
+        // previous value and `filtered` would be off by one.
+        filtered = Self.computeFiltered(items: items, query: query)
+        pinnedShortcuts = Self.computePinnedShortcuts(for: items)
         ensureValidSelection()
     }
 
@@ -176,7 +180,7 @@ struct PanelView: View {
         // Recompute `filtered`/`pinnedShortcuts` only when their inputs change
         // — not on every body re-evaluation as the computed-property version
         // did.
-        .onReceive(store.$items) { _ in handleItemsChange() }
+        .onReceive(store.$items) { newItems in handleItemsChange(items: newItems) }
         .onChange(of: query) { _ in handleQueryChange() }
         .environment(\.textScale, preferences.textSize.scaleFactor)
     }
