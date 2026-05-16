@@ -700,6 +700,15 @@ private func presentPinLimitAlert(maxPinnedItems: Int) {
     alert.runModal()
 }
 
+private func presentFileGoneAlert() {
+    let alert = NSAlert()
+    alert.messageText = "File no longer exists"
+    alert.informativeText = "The original file can't be found. It may have been deleted, or it lives on a volume that isn't currently mounted."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
+}
+
 private struct ItemRow: View {
     let item: ClipboardItem
     let store: ClipboardStore
@@ -810,18 +819,35 @@ private struct ItemRow: View {
             )
         case .image(let filename):
             return .image(store.imageURL(for: filename))
-        case .fileURLs(let paths):
-            return .fileURLs(paths.map { URL(fileURLWithPath: $0) })
+        case .fileURLs:
+            // Use resolved URLs so drag-out follows files that have been
+            // renamed or moved since capture. `RowDragSourceNSView` filters
+            // out non-existent paths internally.
+            return .fileURLs(item.resolveAllFileURLs().map(\.url))
         }
     }
 
     @ViewBuilder
     private var contextMenuItems: some View {
         switch item.content {
-        case .fileURLs(let paths):
-            Button("Reveal in Finder") { revealInFinder(paths) }
-            Button("Open") { openFiles(paths) }
-            Button("Copy path as text") { copyPathAsText(paths) }
+        case .fileURLs:
+            // Resolved once per menu open. Bookmarks track files by inode,
+            // so renames/moves are transparent; missing files surface as
+            // `exists == false` and the action shows an alert instead of
+            // silently doing nothing.
+            let resolved = item.resolveAllFileURLs()
+            let existingURLs = resolved.filter(\.exists).map(\.url)
+            Button("Reveal in Finder") {
+                if existingURLs.isEmpty { presentFileGoneAlert() }
+                else { revealInFinder(existingURLs) }
+            }
+            Button("Open") {
+                if existingURLs.isEmpty { presentFileGoneAlert() }
+                else { openFiles(existingURLs) }
+            }
+            // Path copy still works even when files are missing — the path
+            // string is sometimes useful on its own (logs, error reports).
+            Button("Copy path as text") { copyPathAsText(resolved.map(\.url)) }
         case .image(let filename):
             Button("Save as…") { saveImageAs(filename) }
             Button("Open in Preview") { openImage(filename) }
@@ -834,21 +860,20 @@ private struct ItemRow: View {
 
     // MARK: – File actions
 
-    private func revealInFinder(_ paths: [String]) {
-        let urls = paths.map { URL(fileURLWithPath: $0) }
+    private func revealInFinder(_ urls: [URL]) {
         NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
-    private func openFiles(_ paths: [String]) {
-        for p in paths {
-            NSWorkspace.shared.open(URL(fileURLWithPath: p))
+    private func openFiles(_ urls: [URL]) {
+        for url in urls {
+            NSWorkspace.shared.open(url)
         }
     }
 
-    private func copyPathAsText(_ paths: [String]) {
+    private func copyPathAsText(_ urls: [URL]) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(paths.joined(separator: "\n"), forType: .string)
+        pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
     }
 
     // MARK: – Image actions

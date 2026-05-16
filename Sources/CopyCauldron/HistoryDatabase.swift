@@ -47,6 +47,14 @@ final class HistoryDatabase {
                 columns: ["is_pinned", "pinned_at"]
             )
         }
+        m.registerMigration("v2_file_url_bookmarks") { db in
+            // JSON array of base64-encoded `URL.bookmarkData()` blobs, one per
+            // file in `file_urls_json`. Lets us follow renames/moves and
+            // detect when the original file is gone.
+            try db.alter(table: "items") { t in
+                t.add(column: "file_urls_bookmarks_json", .text)
+            }
+        }
         return m
     }
 
@@ -213,6 +221,7 @@ final class HistoryDatabase {
         var textContent: String?
         var imageFilename: String?
         var fileUrlsJson: String?
+        var fileUrlsBookmarksJson: String?
         var rtfData: Data?
         var htmlData: Data?
         var isPinned: Bool
@@ -221,14 +230,15 @@ final class HistoryDatabase {
         enum CodingKeys: String, CodingKey {
             case id
             case timestamp
-            case contentKind     = "content_kind"
-            case textContent     = "text_content"
-            case imageFilename   = "image_filename"
-            case fileUrlsJson    = "file_urls_json"
-            case rtfData         = "rtf_data"
-            case htmlData        = "html_data"
-            case isPinned        = "is_pinned"
-            case pinnedAt        = "pinned_at"
+            case contentKind            = "content_kind"
+            case textContent            = "text_content"
+            case imageFilename          = "image_filename"
+            case fileUrlsJson           = "file_urls_json"
+            case fileUrlsBookmarksJson  = "file_urls_bookmarks_json"
+            case rtfData                = "rtf_data"
+            case htmlData               = "html_data"
+            case isPinned               = "is_pinned"
+            case pinnedAt               = "pinned_at"
         }
     }
 
@@ -239,6 +249,7 @@ final class HistoryDatabase {
         var textContent: String?
         var imageFilename: String?
         var fileUrlsJson: String?
+        var fileUrlsBookmarksJson: String?
 
         switch item.content {
         case .text(let s):
@@ -256,6 +267,15 @@ final class HistoryDatabase {
             } else {
                 fileUrlsJson = "[]"
             }
+            // Bookmarks travel alongside the paths so we can resolve moves
+            // and renames at click time. Encoded as a JSON array of base64
+            // strings to mirror the path-array layout.
+            if let bookmarks = item.fileURLBookmarks {
+                let encoded = bookmarks.map { $0.base64EncodedString() }
+                if let data = try? JSONEncoder().encode(encoded) {
+                    fileUrlsBookmarksJson = String(data: data, encoding: .utf8)
+                }
+            }
         }
 
         return Record(
@@ -265,6 +285,7 @@ final class HistoryDatabase {
             textContent: textContent,
             imageFilename: imageFilename,
             fileUrlsJson: fileUrlsJson,
+            fileUrlsBookmarksJson: fileUrlsBookmarksJson,
             rtfData: item.rtfData,
             htmlData: item.htmlData,
             isPinned: item.isPinned,
@@ -274,6 +295,7 @@ final class HistoryDatabase {
 
     private static func fromRecord(_ record: Record) -> ClipboardItem {
         let content: ClipboardContent
+        var bookmarks: [Data]? = nil
         switch record.contentKind {
         case "image":
             content = .image(filename: record.imageFilename ?? "")
@@ -283,6 +305,11 @@ final class HistoryDatabase {
                 .flatMap { try? JSONDecoder().decode([String].self, from: $0) }
                 ?? []
             content = .fileURLs(paths)
+            if let json = record.fileUrlsBookmarksJson,
+               let data = json.data(using: .utf8),
+               let strings = try? JSONDecoder().decode([String].self, from: data) {
+                bookmarks = strings.compactMap { Data(base64Encoded: $0) }
+            }
         default: // "text" (and a safe fallback if something unexpected appears)
             content = .text(record.textContent ?? "")
         }
@@ -293,7 +320,8 @@ final class HistoryDatabase {
             isPinned: record.isPinned,
             pinnedAt: record.pinnedAt,
             rtfData: record.rtfData,
-            htmlData: record.htmlData
+            htmlData: record.htmlData,
+            fileURLBookmarks: bookmarks
         )
     }
 

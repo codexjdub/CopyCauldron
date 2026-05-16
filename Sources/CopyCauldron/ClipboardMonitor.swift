@@ -71,7 +71,25 @@ final class ClipboardMonitor {
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
             let paths = urls.map { $0.path }
-            return ClipboardItem(content: .fileURLs(paths))
+            // Create per-file bookmarks alongside the paths so the menu
+            // actions can survive renames/moves. No `.minimalBookmark` —
+            // we're not sandboxed, so no security-scope dance is needed.
+            // A failed bookmark is represented as empty `Data`; if every
+            // entry fails (likely the source pasteboard had transient
+            // URLs), drop the whole array so resolvers fall through to
+            // the raw-path branch unambiguously.
+            let bookmarks: [Data] = urls.map { url in
+                (try? url.bookmarkData(
+                    options: [],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )) ?? Data()
+            }
+            let resolvedBookmarks: [Data]? = bookmarks.allSatisfy(\.isEmpty) ? nil : bookmarks
+            return ClipboardItem(
+                content: .fileURLs(paths),
+                fileURLBookmarks: resolvedBookmarks
+            )
         }
 
         // Image

@@ -61,6 +61,13 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// doesn't allocate a fresh lowercased copy of every item's content.
     /// Not persisted — recomputed on every load.
     let lowercasedSearchableText: String
+    /// Bookmark data per file URL (one entry per path in `.fileURLs(_)`).
+    /// Persisted via SQLite (not JSON) so we can survive renames and moves
+    /// — `URL.bookmarkData()` tracks files by inode, not path. `nil` for
+    /// non-fileURL items and for legacy rows captured before this field
+    /// existed. Resolution is best-effort: callers fall back to the raw
+    /// path when the bookmark fails (file deleted, volume unmounted, etc.).
+    let fileURLBookmarks: [Data]?
 
     init(
         id: UUID = UUID(),
@@ -69,7 +76,8 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         isPinned: Bool = false,
         pinnedAt: Date? = nil,
         rtfData: Data? = nil,
-        htmlData: Data? = nil
+        htmlData: Data? = nil,
+        fileURLBookmarks: [Data]? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -78,6 +86,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.pinnedAt = pinnedAt
         self.rtfData = rtfData
         self.htmlData = htmlData
+        self.fileURLBookmarks = fileURLBookmarks
         self.textKind = Self.computeKind(from: content)
         self.lowercasedSearchableText = Self.computeSearchableText(from: content)
     }
@@ -115,6 +124,10 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         }
         self.rtfData = try? c.decode(Data.self, forKey: .rtfData)
         self.htmlData = try? c.decode(Data.self, forKey: .htmlData)
+        // `fileURLBookmarks` is intentionally not in CodingKeys — bookmarks
+        // are persisted via SQLite, not the (now-dead) JSON path. Older
+        // decoded items just get nil here.
+        self.fileURLBookmarks = nil
         self.textKind = Self.computeKind(from: self.content)
         self.lowercasedSearchableText = Self.computeSearchableText(from: self.content)
     }
@@ -155,5 +168,56 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         case .image:    return "photo"
         case .fileURLs: return "doc.on.doc"
         }
+    }
+}
+
+/// Result of resolving a `.fileURLs` entry via its bookmark (with raw-path
+/// fallback). Callers should consult `exists` before performing
+/// filesystem-touching actions (`open`, `reveal in Finder`).
+struct ResolvedFileURL {
+    let url: URL
+    /// `true` when the bookmark resolved but the file has moved/renamed
+    /// since capture. The `url` is still valid; refresh callers can replace
+    /// the stored bookmark if they care.
+    let isStale: Bool
+    /// `false` when the file no longer exists at the resolved location.
+    let exists: Bool
+}
+
+extension ClipboardItem {
+    /// Resolves a single file URL for a `.fileURLs` item. Prefers the stored
+    /// bookmark (follows renames/moves); falls back to the raw stored path.
+    /// Returns nil for non-fileURL items or out-of-range indices.
+    func resolveFileURL(at index: Int) -> ResolvedFileURL? {
+        guard case .fileURLs(let paths) = content, index < paths.count else { return nil }
+        let path = paths[index]
+        if let bookmarks = fileURLBookmarks, index < bookmarks.count {
+            var isStale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmarks[index],
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) {
+                return ResolvedFileURL(
+                    url: url,
+                    isStale: isStale,
+                    exists: FileManager.default.fileExists(atPath: url.path)
+                )
+            }
+        }
+        let url = URL(fileURLWithPath: path)
+        return ResolvedFileURL(
+            url: url,
+            isStale: false,
+            exists: FileManager.default.fileExists(atPath: path)
+        )
+    }
+
+    /// Resolves every path in a `.fileURLs` item. Empty for other content
+    /// kinds. Order matches the stored paths array.
+    func resolveAllFileURLs() -> [ResolvedFileURL] {
+        guard case .fileURLs(let paths) = content else { return [] }
+        return (0..<paths.count).compactMap { resolveFileURL(at: $0) }
     }
 }
