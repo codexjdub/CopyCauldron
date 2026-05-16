@@ -50,6 +50,12 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// HTML payload — many apps (browsers, Notes) put HTML on the pasteboard
     /// instead of RTF.
     var htmlData: Data?
+    /// Detected text classification (URL / email / JSON / color / etc.) used
+    /// by `ItemRow` to pick a row icon. Computed once at construction time so
+    /// SwiftUI rows don't re-run `TextKind.detect` on every body re-render
+    /// (the detector is expensive: it instantiates `NSDataDetector` and runs
+    /// several regexes). Not persisted — recomputed on every load.
+    let textKind: TextKind
 
     init(
         id: UUID = UUID(),
@@ -67,6 +73,12 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.pinnedAt = pinnedAt
         self.rtfData = rtfData
         self.htmlData = htmlData
+        self.textKind = Self.computeKind(from: content)
+    }
+
+    private static func computeKind(from content: ClipboardContent) -> TextKind {
+        if case .text(let s) = content { return TextKind.detect(in: s) }
+        return .plain
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -89,6 +101,21 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         }
         self.rtfData = try? c.decode(Data.self, forKey: .rtfData)
         self.htmlData = try? c.decode(Data.self, forKey: .htmlData)
+        self.textKind = Self.computeKind(from: self.content)
+    }
+
+    // Explicit encode: `textKind` is derived from `content`, so we don't write
+    // it (and the Codable synthesizer can't auto-generate this anyway with the
+    // extra non-Codable property in the mix).
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(timestamp, forKey: .timestamp)
+        try c.encode(content, forKey: .content)
+        try c.encode(isPinned, forKey: .isPinned)
+        try c.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
+        try c.encodeIfPresent(rtfData, forKey: .rtfData)
+        try c.encodeIfPresent(htmlData, forKey: .htmlData)
     }
 
     var displayTitle: String {

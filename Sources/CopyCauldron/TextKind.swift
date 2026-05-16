@@ -18,6 +18,17 @@ enum TextKind: Equatable {
     case hashtag
     case mention
 
+    // Detectors are expensive to instantiate (`NSDataDetector` does linguistic
+    // tagging setup under the hood). Hoist them to `static let` so they're
+    // built once per process, not once per `detect` call.
+    private static let linkDetector: NSDataDetector? = try? NSDataDetector(
+        types: NSTextCheckingResult.CheckingType.link.rawValue
+    )
+    private static let phoneDetector: NSDataDetector? = try? NSDataDetector(
+        types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue
+    )
+    private static let iso8601Formatter = ISO8601DateFormatter()
+
     static func detect(in text: String) -> TextKind {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .plain }
@@ -32,7 +43,7 @@ enum TextKind: Equatable {
 
         // URL / email — entire trimmed string must be a single link.
         let nsRange = NSRange(location: 0, length: (trimmed as NSString).length)
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue),
+        if let detector = linkDetector,
            let match = detector.firstMatch(in: trimmed, options: [], range: nsRange),
            match.range == nsRange,
            let url = match.url {
@@ -44,7 +55,7 @@ enum TextKind: Equatable {
         if isMention(trimmed)     { return .mention }
 
         // Phone — only when the full trimmed string is a phone number.
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue),
+        if let detector = phoneDetector,
            let match = detector.firstMatch(in: trimmed, options: [], range: nsRange),
            match.range == nsRange {
             return .phone
@@ -104,8 +115,8 @@ enum TextKind: Equatable {
             if s.count == 10, n > 1_000_000_000, n < 10_000_000_000 { return true }
             if s.count == 13, n > 1_000_000_000_000, n < 10_000_000_000_000 { return true }
         }
-        // ISO 8601 — anything ISO8601DateFormatter can parse.
-        if ISO8601DateFormatter().date(from: s) != nil { return true }
+        // ISO 8601 — anything `iso8601Formatter` can parse.
+        if iso8601Formatter.date(from: s) != nil { return true }
         return false
     }
 

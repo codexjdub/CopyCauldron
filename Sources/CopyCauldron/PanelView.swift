@@ -580,8 +580,13 @@ private final class RowDragSourceNSView: NSView, NSDraggingSource {
 
         case .image(let url):
             let pasteboardItem = NSPasteboardItem()
-            var image = NSImage(contentsOf: url)
-            if let data = try? Data(contentsOf: url) {
+            // Read the file once and reuse the bytes for both the PNG
+            // pasteboard payload and the NSImage used as the drag preview.
+            // The previous version did `NSImage(contentsOf:)` *and*
+            // `Data(contentsOf:)` — two disk reads, one PNG decode.
+            let data = try? Data(contentsOf: url)
+            var image = data.flatMap { NSImage(data: $0) }
+            if let data {
                 pasteboardItem.setData(data, forType: .png)
                 if let tiff = image?.tiffRepresentation {
                     pasteboardItem.setData(tiff, forType: .tiff)
@@ -855,8 +860,10 @@ private struct ItemRow: View {
     }
 
     @ViewBuilder
-    private func textPreview(for text: String) -> some View {
-        switch TextKind.detect(in: text) {
+    private func textPreview(for kind: TextKind) -> some View {
+        // `kind` is precomputed on `ClipboardItem`; we no longer run
+        // `TextKind.detect` from inside the SwiftUI body.
+        switch kind {
         case .plain:      typeIcon("text.alignleft")
         case .url:        typeIcon("globe")
         case .email:      typeIcon("envelope")
@@ -899,30 +906,40 @@ private struct ItemRow: View {
     @ViewBuilder
     private var preview: some View {
         switch item.content {
-        case .text(let s):
-            textPreview(for: s)
+        case .text:
+            textPreview(for: item.textKind)
         case .image(let filename):
-            if let nsimg = NSImage(contentsOf: store.imageURL(for: filename)) {
-                Image(nsImage: nsimg)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+            CachedThumbnail(
+                url: store.imageURL(for: filename),
+                maxPixelSize: 64,
+                placeholder: {
+                    Image(systemName: "photo")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+            )
+            .frame(width: 32, height: 32)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+        case .fileURLs(let paths):
+            if let firstPath = paths.first {
+                let firstURL = URL(fileURLWithPath: firstPath)
+                if ThumbnailCache.isImageFile(firstURL) {
+                    CachedThumbnail(
+                        url: firstURL,
+                        maxPixelSize: 64,
+                        placeholder: {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: firstPath))
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                        }
+                    )
                     .frame(width: 32, height: 32)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
-            } else {
-                Image(systemName: "photo")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.secondary)
-            }
-        case .fileURLs(let paths):
-            if let first = paths.first {
-                if let thumb = Self.imageThumbnail(forPath: first) {
-                    Image(nsImage: thumb)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 32, height: 32)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 } else {
-                    let icon = NSWorkspace.shared.icon(forFile: first)
+                    // Non-image files: `NSWorkspace.shared.icon` is a fast
+                    // system call (icons are kept in a system-wide cache), no
+                    // need for our own caching layer.
+                    let icon = NSWorkspace.shared.icon(forFile: firstPath)
                     Image(nsImage: icon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -934,18 +951,5 @@ private struct ItemRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private static let imageExtensions: Set<String> = [
-        "png", "jpg", "jpeg", "gif", "heic", "heif",
-        "tiff", "tif", "bmp", "webp"
-    ]
-
-    /// Returns an `NSImage` for image files; nil for other file types or when
-    /// the file isn't readable.
-    static func imageThumbnail(forPath path: String) -> NSImage? {
-        let url = URL(fileURLWithPath: path)
-        guard imageExtensions.contains(url.pathExtension.lowercased()) else { return nil }
-        return NSImage(contentsOf: url)
     }
 }
