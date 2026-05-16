@@ -42,16 +42,6 @@ struct PreferencesView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Always paste as plain text", isOn: $preferences.pastePlainTextOnly)
-                    if preferences.pastePlainTextOnly {
-                        Text("Rich-text formatting (fonts, colors) captured from the source will be stripped before pasting.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
                 LabeledContent("Text size") {
                     Picker("", selection: $preferences.textSize) {
                         ForEach(TextSize.allCases) { size in
