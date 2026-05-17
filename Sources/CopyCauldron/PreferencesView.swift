@@ -7,7 +7,7 @@ struct PreferencesView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Open clipboard:") {
+                LabeledContent("Shortcut") {
                     HotKeyRecorder(hotKey: $preferences.hotKey)
                 }
             } header: {
@@ -17,43 +17,38 @@ struct PreferencesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
             Section {
                 Toggle("Launch at login", isOn: $preferences.launchAtLogin)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Auto-open on hover", isOn: $preferences.openOnHover)
-                    if preferences.openOnHover {
-                        Text("The panel will open automatically when you hover the menu bar icon. Click outside to dismiss.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text("The panel opens automatically when you hover the menu-bar icon. Press ⎋ or click the X in the panel header to dismiss it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Auto-paste on selection", isOn: $preferences.autoPaste)
-                    if preferences.autoPaste {
-                        Text(Paster.isTrusted()
-                             ? "Selecting an item will paste it into the previously active app. Press 1–9 in the panel to paste a pinned item."
-                             : "Auto-paste needs Accessibility permission. Open System Settings → Privacy & Security → Accessibility, enable CopyCauldron, then relaunch.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text(Paster.isTrusted()
+                         ? "Selecting an item pastes it into the previously active app. Pinned items also have keyboard shortcuts (1–9, then a–o, q–z) for direct paste."
+                         : "Auto-paste needs Accessibility permission. Open System Settings → Privacy & Security → Accessibility, enable CopyCauldron, then relaunch.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                LabeledContent("Text size") {
-                    Picker("", selection: $preferences.textSize) {
-                        ForEach(TextSize.allCases) { size in
-                            Text(size.displayName).tag(size)
-                        }
+                Picker("Text size", selection: $preferences.textSize) {
+                    ForEach(TextSize.allCases) { size in
+                        Text(size.displayName).tag(size)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
                 }
+                .pickerStyle(.segmented)
             } header: {
                 Text("General")
             }
+
             Section {
                 Stepper(
                     "History size: \(preferences.maxHistoryItems)",
@@ -74,13 +69,16 @@ struct PreferencesView: View {
             } header: {
                 Text("History")
             } footer: {
-                Text("Pinned items are kept across the history limit, survive Clear, and are never auto-expired.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pinned items are exempt from the history limit, the Clear button, and auto-expire.")
+                    Text("Auto-expire sweeps unpinned items past the chosen age at launch and every 60 minutes thereafter.")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 560)
+        .frame(width: 460, height: 600)
     }
 }
 
