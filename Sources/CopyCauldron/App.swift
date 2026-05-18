@@ -37,6 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private let hoverOpenDelay: TimeInterval = 0.3
     private var frontmostAppObserver: NSObjectProtocol?
     private var previousFrontmostApp: NSRunningApplication?
+    /// Identifies the currently-active paste flow. A fresh value is generated
+    /// each time `activate(_:invertPlainText:)` schedules a paste; the
+    /// `pasteWhenFrontmost` recursion bails out the moment it sees a token
+    /// other than its own. Coalesces back-to-back item activations so we
+    /// don't fire ⌘V twice when the user rapidly picks two items.
+    private var currentPasteFlightToken: UUID?
     private let panelOpenedSubject = PassthroughSubject<Void, Never>()
     private lazy var preferencesController = PreferencesWindowController(
         preferences: preferences
@@ -423,6 +429,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         preferences.panelOrigin = panel.frame.origin
         copyToPasteboard(item, plainTextOnly: plainText)
         if preferences.autoPaste {
+            // Fresh token per activate() — any older paste chain in flight
+            // sees a mismatch on its next tick and abandons itself, so two
+            // rapid item picks coalesce into a single ⌘V on the latest one.
+            let token = UUID()
+            currentPasteFlightToken = token
             if let prev {
                 // macOS 14+ cooperative activation: yield our activation rights
                 // so the target app can activate over us.
@@ -434,10 +445,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 // override), it leaks through CGEvent at the HID level and
                 // changes ⌘V into ⌘⇧V. Wait until they release before pasting.
                 waitForShiftRelease { [weak self] in
-                    self?.pasteWhenFrontmost(prev)
+                    self?.pasteWhenFrontmost(prev, token: token)
                 }
             } else {
-                Paster.pasteAfterDelay()
+                // No known target — schedule a fallback paste guarded by the
+                // same token so a rapid follow-up activate can supersede it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self, self.currentPasteFlightToken == token else { return }
+                    self.currentPasteFlightToken = nil
+                    Paster.pasteAfterDelay(0)
+                }
             }
         }
     }
@@ -460,17 +477,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     /// Waits until `target` is reported as frontmost (or a 400ms timeout),
-    /// then posts the synthetic ⌘V immediately.
+    /// then posts the synthetic ⌘V immediately. The `token` is checked on
+    /// each iteration so an older chain bails as soon as a newer
+    /// `activate()` installs a fresh token.
     private func pasteWhenFrontmost(_ target: NSRunningApplication,
+                                    token: UUID,
                                     deadline: Date = Date().addingTimeInterval(0.4)) {
+        // A newer activate() has taken over — abandon this chain.
+        guard currentPasteFlightToken == token else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         if frontmost?.bundleIdentifier == target.bundleIdentifier
             || Date() >= deadline {
+            // Pasting now. Clear the token before scheduling so anything that
+            // still holds a stale copy will guard out.
+            currentPasteFlightToken = nil
             Paster.pasteAfterDelay(0)
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-            self?.pasteWhenFrontmost(target, deadline: deadline)
+            self?.pasteWhenFrontmost(target, token: token, deadline: deadline)
         }
     }
 

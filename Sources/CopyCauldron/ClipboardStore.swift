@@ -211,7 +211,12 @@ final class ClipboardStore: ObservableObject {
 
     private func cleanup(_ item: ClipboardItem) {
         if case .image(let filename) = item.content {
-            try? FileManager.default.removeItem(at: imageURL(for: filename))
+            let url = imageURL(for: filename)
+            try? FileManager.default.removeItem(at: url)
+            // Drop the in-memory thumbnail too — otherwise NSCache would
+            // keep holding a stale `NSImage` until memory pressure kicked
+            // in, even though the underlying file is gone.
+            ThumbnailCache.shared.evict(url: url)
         }
     }
 

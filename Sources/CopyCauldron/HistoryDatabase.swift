@@ -13,6 +13,10 @@ final class HistoryDatabase {
     init(url: URL) throws {
         var config = Configuration()
         config.label = "CopyCauldron.HistoryDatabase"
+        // Default pool keeps ~5 reader connections + 1 writer open. We use a
+        // single observation reader plus occasional CRUD writes, so two is
+        // plenty — saves a handful of file descriptors at no perf cost.
+        config.maximumReaderCount = 2
         dbPool = try DatabasePool(path: url.path, configuration: config)
         try Self.migrator.migrate(dbPool)
     }

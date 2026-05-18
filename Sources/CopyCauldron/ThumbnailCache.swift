@@ -47,6 +47,15 @@ final class ThumbnailCache {
         return nil
     }
 
+    /// Drops the cached thumbnail for a URL. Called when the underlying
+    /// image file is deleted so we don't keep a stale `NSImage` alive in
+    /// memory until `NSCache` evicts it under pressure. Evicts the
+    /// default 64px entry — currently the only size produced anywhere.
+    func evict(url: URL, maxPixelSize: Int = 64) {
+        let key = "\(url.path)|\(maxPixelSize)" as NSString
+        cache.removeObject(forKey: key)
+    }
+
     private static func makeThumbnail(url: URL, maxPixelSize: Int) -> NSImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return nil
