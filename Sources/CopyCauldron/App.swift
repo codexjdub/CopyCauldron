@@ -23,7 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     let store = ClipboardStore()
     let preferences = Preferences()
     private(set) lazy var monitor = ClipboardMonitor(store: store)
-    private let hotKeyManager = HotKeyManager()
+    private let hotKeyManager = HotKeyManager(id: 1)
+    private let quickSwitcherHotKeyManager = HotKeyManager(id: 2)
 
     private var statusItem: NSStatusItem!
     private var panel: FloatingPanel!
@@ -44,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     /// don't fire ⌘V twice when the user rapidly picks two items.
     private var currentPasteFlightToken: UUID?
     private let panelOpenedSubject = PassthroughSubject<Void, Never>()
+
+    // MARK: – Quick switcher state
+    private var quickSwitcherPanel: FloatingPanel!
+    private var quickSwitcherOutsideClickMonitor: Any?
+    private var quickSwitcherHotKeySink: AnyCancellable?
     private lazy var preferencesController = PreferencesWindowController(
         preferences: preferences
     )
@@ -77,6 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             .sink { [weak self] pinned in
                 self?.applyPinState(pinned)
             }
+        setUpQuickSwitcherPanel()
+        setUpQuickSwitcherHotKey()
     }
 
     // MARK: – Status item
@@ -275,6 +283,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     /// Three-state toggle: hidden → show; visible-but-behind → raise; visible
     /// and key → close. Used by the menu-bar icon and the global hotkey.
     private func togglePanel() {
+        // Dismiss the HUD as a courtesy — if the user is reaching for the
+        // main panel, the transient overlay shouldn't linger on top of it.
+        closeQuickSwitcher()
         if !panel.isVisible {
             showPanel()
         } else if !panel.isKeyWindow {
@@ -421,15 +432,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     /// true (e.g. the user held Shift) the effective plain-text mode is
     /// flipped for this paste only.
     private func activate(_ item: ClipboardItem, invertPlainText: Bool = false) {
-        let plainText = preferences.pastePlainTextOnly != invertPlainText
-        let prev = previousFrontmostApp
+        // Main-panel activation: save the panel origin so we restore the
+        // same position next time. The quick switcher uses `performPaste`
+        // directly since it doesn't own a draggable panel.
         // Panel stays open in both pin states now. When pin is off the
         // target app's activation below brings it forward over the panel;
         // when pin is on the panel keeps floating above.
         preferences.panelOrigin = panel.frame.origin
+        performPaste(item, invertPlainText: invertPlainText)
+    }
+
+    /// Shared paste flow used by both the main panel and the quick switcher
+    /// HUD. Copies the item to the system pasteboard and, when auto-paste
+    /// is enabled, hands activation to the previous app and posts ⌘V.
+    private func performPaste(_ item: ClipboardItem, invertPlainText: Bool = false) {
+        let plainText = preferences.pastePlainTextOnly != invertPlainText
+        let prev = previousFrontmostApp
         copyToPasteboard(item, plainTextOnly: plainText)
         if preferences.autoPaste {
-            // Fresh token per activate() — any older paste chain in flight
+            // Fresh token per paste — any older paste chain in flight
             // sees a mismatch on its next tick and abandons itself, so two
             // rapid item picks coalesce into a single ⌘V on the latest one.
             let token = UUID()
@@ -505,5 +526,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.monitor.resetBaseline()
         }
+    }
+
+    // MARK: – Quick switcher (HUD)
+
+    private func setUpQuickSwitcherPanel() {
+        // Fixed width, tight height — the SwiftUI content sizes itself
+        // around its 4 rows plus padding.
+        let size = NSSize(width: 320, height: 200)
+        quickSwitcherPanel = FloatingPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        quickSwitcherPanel.isFloatingPanel = true
+        quickSwitcherPanel.level = .floating
+        quickSwitcherPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        quickSwitcherPanel.hidesOnDeactivate = false
+        quickSwitcherPanel.isReleasedWhenClosed = false
+        quickSwitcherPanel.isOpaque = false
+        quickSwitcherPanel.backgroundColor = .clear
+        quickSwitcherPanel.hasShadow = true
+
+        let hostingController = NSHostingController(
+            rootView: QuickSwitcherView(
+                store: store,
+                onActivate: { [weak self] item, shiftHeld in
+                    self?.activateFromQuickSwitcher(item, invertPlainText: shiftHeld)
+                },
+                onClose: { [weak self] in
+                    self?.closeQuickSwitcher()
+                }
+            )
+        )
+        hostingController.view.wantsLayer = true
+        hostingController.view.layer?.backgroundColor = NSColor.clear.cgColor
+        quickSwitcherPanel.contentViewController = hostingController
+    }
+
+    private func setUpQuickSwitcherHotKey() {
+        quickSwitcherHotKeyManager.onPress = { [weak self] in
+            self?.toggleQuickSwitcher()
+        }
+        quickSwitcherHotKeyManager.register(preferences.quickSwitcherHotKey)
+        quickSwitcherHotKeySink = preferences.$quickSwitcherHotKey
+            .dropFirst()
+            .sink { [weak self] newKey in
+                self?.quickSwitcherHotKeyManager.register(newKey)
+            }
+    }
+
+    private func toggleQuickSwitcher() {
+        if quickSwitcherPanel.isVisible {
+            closeQuickSwitcher()
+        } else {
+            showQuickSwitcher()
+        }
+    }
+
+    private func showQuickSwitcher() {
+        // Track the previously-active app so paste targets the right place,
+        // same pattern as the main panel.
+        if let frontmost = NSWorkspace.shared.frontmostApplication {
+            rememberExternalFrontmostApp(frontmost)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+
+        let mouseLocation = NSEvent.mouseLocation
+        let size = quickSwitcherPanel.frame.size
+        let origin = clampedQuickSwitcherOrigin(near: mouseLocation, size: size)
+        quickSwitcherPanel.setFrameOrigin(origin)
+        quickSwitcherPanel.makeKeyAndOrderFront(nil)
+
+        // Transient — outside-click dismisses. The main panel persists,
+        // but the HUD is meant to be momentary.
+        quickSwitcherOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.closeQuickSwitcher()
+            }
+        }
+    }
+
+    private func closeQuickSwitcher() {
+        if let m = quickSwitcherOutsideClickMonitor {
+            NSEvent.removeMonitor(m)
+            quickSwitcherOutsideClickMonitor = nil
+        }
+        // `?.` because togglePanel calls this courtesy-close, which could
+        // fire before applicationDidFinishLaunching wires up the panel
+        // (it doesn't in practice, but harmless to guard).
+        quickSwitcherPanel?.orderOut(nil)
+    }
+
+    /// Positions the HUD so the cursor sits ~10pt inside the top edge,
+    /// horizontally centered on the cursor, clamped to the cursor's screen.
+    private func clampedQuickSwitcherOrigin(near mouseLocation: NSPoint,
+                                            size: CGSize) -> NSPoint {
+        var x = mouseLocation.x - size.width / 2
+        var topY = mouseLocation.y - 10
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) })
+            ?? NSScreen.main
+        let visible = (screen?.visibleFrame ?? .zero).insetBy(dx: 8, dy: 8)
+        if x < visible.minX { x = visible.minX }
+        if x + size.width > visible.maxX { x = visible.maxX - size.width }
+        if topY > visible.maxY { topY = visible.maxY }
+        if topY - size.height < visible.minY { topY = visible.minY + size.height }
+        // NSWindow origin is bottom-left, so convert top → bottom-left.
+        return NSPoint(x: x, y: topY - size.height)
+    }
+
+    private func activateFromQuickSwitcher(_ item: ClipboardItem,
+                                           invertPlainText: Bool = false) {
+        closeQuickSwitcher()
+        performPaste(item, invertPlainText: invertPlainText)
     }
 }

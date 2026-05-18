@@ -7,15 +7,19 @@ struct PreferencesView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Shortcut") {
+                LabeledContent("Open panel") {
                     HotKeyRecorder(hotKey: $preferences.hotKey)
                 }
+                LabeledContent("Quick switcher") {
+                    HotKeyRecorder(hotKey: $preferences.quickSwitcherHotKey)
+                }
             } header: {
-                Text("Global Shortcut")
+                Text("Global Shortcuts")
             } footer: {
-                Text("Press a key combo with at least one modifier (⌘ ⇧ ⌃ ⌥). Press ⎋ to cancel.")
+                Text("Press a key combo with at least one modifier (⌘ ⇧ ⌃ ⌥). Press ⎋ to cancel. The quick switcher pops a small 4-row HUD near your cursor — press 1–4 to paste.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {

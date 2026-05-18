@@ -77,6 +77,7 @@ extension EnvironmentValues {
 final class Preferences: ObservableObject {
     private let defaults = UserDefaults.standard
     private let hotKeyKey = "hotKey"
+    private let quickSwitcherHotKeyKey = "quickSwitcherHotKey"
     private let openOnHoverKey = "openOnHover"
     private let maxPinnedItemsKey = "maxPinnedItems"
     // Note: these UserDefaults string keys keep their historical names so
@@ -102,6 +103,10 @@ final class Preferences: ObservableObject {
 
     @Published var hotKey: HotKey {
         didSet { saveHotKey() }
+    }
+
+    @Published var quickSwitcherHotKey: HotKey {
+        didSet { saveQuickSwitcherHotKey() }
     }
 
     @Published var openOnHover: Bool {
@@ -201,6 +206,12 @@ final class Preferences: ObservableObject {
         } else {
             self.hotKey = .defaultHotKey
         }
+        if let data = defaults.data(forKey: quickSwitcherHotKeyKey),
+           let decoded = try? JSONDecoder().decode(HotKey.self, from: data) {
+            self.quickSwitcherHotKey = decoded
+        } else {
+            self.quickSwitcherHotKey = .defaultQuickSwitcherHotKey
+        }
         self.launchAtLogin = LaunchAtLogin.isEnabled
         self.openOnHover = defaults.bool(forKey: openOnHoverKey)
         let storedMax = defaults.integer(forKey: maxPinnedItemsKey)
@@ -219,6 +230,12 @@ final class Preferences: ObservableObject {
     private func saveHotKey() {
         if let data = try? JSONEncoder().encode(hotKey) {
             defaults.set(data, forKey: hotKeyKey)
+        }
+    }
+
+    private func saveQuickSwitcherHotKey() {
+        if let data = try? JSONEncoder().encode(quickSwitcherHotKey) {
+            defaults.set(data, forKey: quickSwitcherHotKeyKey)
         }
     }
 }

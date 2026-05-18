@@ -13,6 +13,13 @@ struct HotKey: Codable, Equatable {
         modifiers: UInt32(cmdKey | shiftKey)
     )
 
+    /// Default for the quick-switcher HUD hotkey (⌘⌥V). Mnemonic: same `V`
+    /// as the main panel, different modifier so they don't collide.
+    static let defaultQuickSwitcherHotKey = HotKey(
+        keyCode: UInt32(kVK_ANSI_V),
+        modifiers: UInt32(cmdKey | optionKey)
+    )
+
     var display: String {
         var s = ""
         if modifiers & UInt32(controlKey) != 0 { s += "⌃" }

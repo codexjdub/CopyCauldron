@@ -2,17 +2,29 @@ import Foundation
 import AppKit
 import Carbon.HIToolbox
 
-/// Wraps Carbon's RegisterEventHotKey so we can listen for a single global
+/// Wraps Carbon's `RegisterEventHotKey` so we can listen for a single global
 /// hotkey without requesting Accessibility permission.
+///
+/// One instance owns one slot (one keyboard combo). Multiple instances can
+/// coexist — the Carbon event handler installed by each one inspects the
+/// `EventHotKeyID` on every press and only fires its own `onPress` when the
+/// (signature, id) pair matches the instance that registered it. That's how
+/// we run two managers side-by-side: one for the main panel hotkey, one for
+/// the quick-switcher HUD.
 @MainActor
 final class HotKeyManager {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
-    private var currentSignature: OSType = 0x43505948 // 'CPYH'
-    private var currentID: UInt32 = 1
+    /// 'CPYH' by default; callers can pass a different signature if they want
+    /// fully separate handlers. The (signature, id) pair must be unique
+    /// across instances or the C callback's filter won't distinguish them.
+    let signature: OSType
+    let id: UInt32
     var onPress: (() -> Void)?
 
-    init() {
+    init(signature: OSType = 0x43505948 /* 'CPYH' */, id: UInt32 = 1) {
+        self.signature = signature
+        self.id = id
         installHandler()
     }
 
@@ -23,12 +35,12 @@ final class HotKeyManager {
 
     func register(_ hotKey: HotKey) {
         unregister()
-        let id = EventHotKeyID(signature: currentSignature, id: currentID)
+        let hotKeyID = EventHotKeyID(signature: signature, id: id)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
             hotKey.keyCode,
             hotKey.modifiers,
-            id,
+            hotKeyID,
             GetApplicationEventTarget(),
             0,
             &ref
@@ -53,10 +65,29 @@ final class HotKeyManager {
         let ctx = Unmanaged.passUnretained(self).toOpaque()
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { (_, _, userData) -> OSStatus in
-                guard let userData else { return noErr }
+            { (_, eventRef, userData) -> OSStatus in
+                guard let userData, let eventRef else { return noErr }
+                // Read the hotkey id from the event so a manager only fires
+                // for its own (signature, id) pair — otherwise every
+                // installed handler would invoke its `onPress` on every
+                // press of any registered hotkey.
+                var hotKeyID = EventHotKeyID()
+                let result = GetEventParameter(
+                    eventRef,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+                guard result == noErr else { return noErr }
                 let manager = Unmanaged<HotKeyManager>
                     .fromOpaque(userData).takeUnretainedValue()
+                guard hotKeyID.signature == manager.signature,
+                      hotKeyID.id == manager.id else {
+                    return noErr
+                }
                 DispatchQueue.main.async {
                     manager.onPress?()
                 }
