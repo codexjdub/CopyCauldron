@@ -86,7 +86,14 @@ final class HotKeyManager {
                     .fromOpaque(userData).takeUnretainedValue()
                 guard hotKeyID.signature == manager.signature,
                       hotKeyID.id == manager.id else {
-                    return noErr
+                    // Carbon event handlers form a LIFO stack: returning
+                    // `noErr` here would tell Carbon "I handled this" and
+                    // *stop* dispatch, swallowing the event before the next
+                    // manager's handler can see it. Use `eventNotHandledErr`
+                    // so the dispatch continues down the stack and the
+                    // manager whose (signature, id) actually matches gets
+                    // its onPress called.
+                    return OSStatus(eventNotHandledErr)
                 }
                 DispatchQueue.main.async {
                     manager.onPress?()

@@ -20,6 +20,11 @@ struct QuickSwitcherView: View {
     @State private var keyMonitor: Any?
     @State private var recentItems: [ClipboardItem] = []
     @State private var selectedID: UUID?
+    /// Captured at first layout; used to scope the local NSEvent monitor
+    /// so it only acts on events for the HUD's own window. Without this
+    /// guard, the main panel's monitor would also fire for HUD events
+    /// (and vice versa), and the first to consume wins.
+    @State private var hostingWindow: NSWindow?
 
     var body: some View {
         VStack(spacing: 2) {
@@ -49,6 +54,11 @@ struct QuickSwitcherView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
         )
+        .background(WindowAccessor { window in
+            if hostingWindow !== window {
+                hostingWindow = window
+            }
+        })
         // SwiftUI's idiomatic Esc handler. Belt-and-suspenders alongside
         // the local NSEvent monitor below.
         .onExitCommand { onClose() }
@@ -79,7 +89,12 @@ struct QuickSwitcherView: View {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handleKey(event) ? nil : event
+            // App-wide monitor — also fires for events targeted at the
+            // main panel. Bail unless the event is for the HUD's window.
+            guard let window = hostingWindow, event.window === window else {
+                return event
+            }
+            return handleKey(event) ? nil : event
         }
     }
 
