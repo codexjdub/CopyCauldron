@@ -522,11 +522,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool) {
-        monitor.suppressNext = true
         store.copyToPasteboard(item, plainTextOnly: plainTextOnly)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.monitor.resetBaseline()
-        }
+        monitor.suppressCurrentChangeCount()
     }
 
     // MARK: – Quick switcher (HUD)

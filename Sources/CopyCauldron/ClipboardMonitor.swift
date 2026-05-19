@@ -7,9 +7,10 @@ final class ClipboardMonitor {
     private let pasteboard = NSPasteboard.general
     private var lastChangeCount: Int
     private var timer: Timer?
-    /// True while we're writing to the pasteboard ourselves (e.g. user clicked an
-    /// item in the panel); skip the next change so we don't re-add it.
-    var suppressNext = false
+    /// Exact pasteboard change count from our own most recent write. We only
+    /// skip that specific change; if the user copies something else before
+    /// the next poll, it has a different change count and gets captured.
+    private var suppressedChangeCount: Int?
 
     /// Pasteboard poll cadence. macOS has no clipboard-change notification, so
     /// we poll `changeCount`. 1.0s matches Maccy/Pastebot and halves the
@@ -40,13 +41,21 @@ final class ClipboardMonitor {
         guard current != lastChangeCount else { return }
         lastChangeCount = current
 
-        if suppressNext {
-            suppressNext = false
+        if suppressedChangeCount == current {
+            suppressedChangeCount = nil
             return
         }
+        suppressedChangeCount = nil
 
         guard let item = readCurrent() else { return }
         store.add(item)
+    }
+
+    /// Called immediately after CopyCauldron writes an item back to the
+    /// pasteboard for paste. The next poll should ignore only this exact
+    /// write-back, not the user's next real copy.
+    func suppressCurrentChangeCount() {
+        suppressedChangeCount = pasteboard.changeCount
     }
 
     /// Pasteboard markers that source apps use to say "don't put this in
@@ -140,9 +149,4 @@ final class ClipboardMonitor {
         )
     }
 
-    /// Refresh the change-count baseline after we wrote to the pasteboard
-    /// ourselves, so the next user copy is detected normally.
-    func resetBaseline() {
-        lastChangeCount = pasteboard.changeCount
-    }
 }
