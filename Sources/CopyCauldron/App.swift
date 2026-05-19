@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ApplicationServices
 import Combine
 
 @main
@@ -547,6 +548,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         quickSwitcherPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         quickSwitcherPanel.hidesOnDeactivate = false
         quickSwitcherPanel.isReleasedWhenClosed = false
+        // NSPanel defaults `becomesKeyOnlyIfNeeded` to true, which means the
+        // panel only becomes key when something inside it "needs" keyboard
+        // input (e.g. a TextField). Our HUD is all Buttons, so without this
+        // override the panel never becomes key, the local NSEvent monitor
+        // never fires, and digit shortcuts silently no-op.
+        quickSwitcherPanel.becomesKeyOnlyIfNeeded = false
         quickSwitcherPanel.isOpaque = false
         quickSwitcherPanel.backgroundColor = .clear
         quickSwitcherPanel.hasShadow = true
@@ -615,8 +622,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             height: Self.quickSwitcherHeight(forRowCount: preferences.quickSwitcherItemCount)
         )
         quickSwitcherPanel.setContentSize(size)
-        let mouseLocation = NSEvent.mouseLocation
-        let origin = clampedQuickSwitcherOrigin(near: mouseLocation, size: size)
+        // Try the Accessibility-based path first: anchor the HUD to the
+        // text insertion point in the previously-active app. Fall back to
+        // the mouse cursor when AX isn't available or the focused element
+        // doesn't expose a usable range (web fields, terminals, etc.).
+        let origin: NSPoint
+        if let prev = previousFrontmostApp,
+           let caret = textInsertionRect(for: prev) {
+            origin = quickSwitcherOrigin(anchoredBelow: caret, size: size)
+        } else {
+            origin = clampedQuickSwitcherOrigin(near: NSEvent.mouseLocation, size: size)
+        }
         quickSwitcherPanel.setFrameOrigin(origin)
         quickSwitcherPanel.makeKeyAndOrderFront(nil)
 
@@ -640,6 +656,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         // fire before applicationDidFinishLaunching wires up the panel
         // (it doesn't in practice, but harmless to guard).
         quickSwitcherPanel?.orderOut(nil)
+    }
+
+    /// Queries the Accessibility API for the screen-space bounds of the
+    /// text insertion point in the focused element of `app`. Returns `nil`
+    /// when AX isn't trusted, the app doesn't expose a focused element, or
+    /// the focused element isn't a text-bearing control. Callers should
+    /// fall back to mouse-cursor positioning on nil.
+    ///
+    /// Coordinates are returned in NSScreen-style (bottom-left origin); AX
+    /// reports top-left origin, so we flip relative to the primary screen.
+    private func textInsertionRect(for app: NSRunningApplication) -> CGRect? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        // Cap how long we'll wait on any single AX call so a hung target
+        // app can't freeze the HUD's appearance.
+        AXUIElementSetMessagingTimeout(appElement, 0.1)
+
+        var focusedRaw: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedRaw
+        ) == .success, let focused = focusedRaw else { return nil }
+        let focusedElement = focused as! AXUIElement
+
+        var rangeRaw: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeRaw
+        ) == .success, let rangeValue = rangeRaw else { return nil }
+
+        var boundsRaw: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            focusedElement,
+            kAXBoundsForRangeParameterizedAttribute as CFString,
+            rangeValue,
+            &boundsRaw
+        ) == .success, let boundsValue = boundsRaw else { return nil }
+
+        var axRect = CGRect.zero
+        guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &axRect),
+              axRect.height > 0 else { return nil }
+
+        // AX is top-left-origin in the global coordinate space of the
+        // primary screen; NSWindow is bottom-left-origin.
+        guard let primaryScreen = NSScreen.screens.first else { return nil }
+        let flippedY = primaryScreen.frame.height - axRect.origin.y - axRect.height
+        return CGRect(
+            x: axRect.origin.x,
+            y: flippedY,
+            width: axRect.width,
+            height: axRect.height
+        )
+    }
+
+    /// Places the HUD just below the caret rect, anchored to its left
+    /// edge. Flips above the caret if there isn't room below, and clamps
+    /// to the screen's visible frame in both axes.
+    private func quickSwitcherOrigin(anchoredBelow caret: CGRect,
+                                     size: CGSize) -> NSPoint {
+        let screen = NSScreen.screens.first { $0.frame.intersects(caret) }
+            ?? NSScreen.main
+        let visible = (screen?.visibleFrame ?? .zero).insetBy(dx: 8, dy: 8)
+
+        var x = caret.minX
+        // "Below the caret" in bottom-left coords = smaller Y. Place the
+        // HUD's top edge a few pt below the caret bottom.
+        var y = caret.minY - 6 - size.height
+
+        // Not enough room below → flip above (HUD's bottom edge just over
+        // the caret top).
+        if y < visible.minY {
+            y = caret.maxY + 6
+        }
+
+        if x < visible.minX { x = visible.minX }
+        if x + size.width > visible.maxX { x = visible.maxX - size.width }
+        if y + size.height > visible.maxY { y = visible.maxY - size.height }
+        if y < visible.minY { y = visible.minY }
+        return NSPoint(x: x, y: y)
     }
 
     /// Positions the HUD so the cursor sits ~10pt inside the top edge,

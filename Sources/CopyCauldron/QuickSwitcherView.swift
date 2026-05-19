@@ -2,10 +2,10 @@ import SwiftUI
 import AppKit
 import Carbon.HIToolbox
 
-/// Compact 4-row HUD-style overlay shown by the secondary hotkey (default
+/// Compact HUD-style overlay shown by the secondary hotkey (default
 /// `⌘⌥V`). Surfaces just the most recent unpinned items so the common case
 /// of "give me the thing I just copied" is a single-keystroke pick. Press
-/// `1`–`4` to paste; `Esc` dismisses without pasting. Holding `Shift` while
+/// `1`–`N` to paste; `Esc` dismisses without pasting. Holding `Shift` while
 /// pressing a number inverts the plain-text-paste preference for that one
 /// paste, matching the main panel's behavior.
 struct QuickSwitcherView: View {
@@ -19,6 +19,7 @@ struct QuickSwitcherView: View {
 
     @State private var keyMonitor: Any?
     @State private var recentItems: [ClipboardItem] = []
+    @State private var selectedID: UUID?
 
     var body: some View {
         VStack(spacing: 2) {
@@ -33,6 +34,7 @@ struct QuickSwitcherView: View {
                     QuickSwitcherRow(
                         item: item,
                         shortcut: "\(index + 1)",
+                        isSelected: item.id == selectedID,
                         onTap: { shiftHeld in
                             onActivate(item, shiftHeld)
                         }
@@ -47,20 +49,18 @@ struct QuickSwitcherView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
         )
+        // SwiftUI's idiomatic Esc handler. Belt-and-suspenders alongside
+        // the local NSEvent monitor below.
+        .onExitCommand { onClose() }
         .onAppear {
             refreshItems(from: store.items)
             installKeyMonitor()
         }
         .onDisappear { removeKeyMonitor() }
         .onReceive(store.$items) { newItems in
-            // Pulls from the closure parameter, not `store.items` — same
-            // `@Published`-willSet gotcha as PanelView.
             refreshItems(from: newItems)
         }
         .onChange(of: preferences.quickSwitcherItemCount) { _ in
-            // User bumped the row count from Preferences while the HUD
-            // wasn't visible; refresh in case it ever shows back up
-            // without a fresh `.onAppear` (rare, but cheap to handle).
             refreshItems(from: store.items)
         }
     }
@@ -68,6 +68,12 @@ struct QuickSwitcherView: View {
     private func refreshItems(from items: [ClipboardItem]) {
         let count = preferences.quickSwitcherItemCount
         recentItems = Array(items.filter { !$0.isPinned }.prefix(count))
+        // Keep the current selection if it still exists in the visible
+        // window; otherwise select the first row so Return / arrow keys
+        // have something to act on.
+        if selectedID == nil || !recentItems.contains(where: { $0.id == selectedID }) {
+            selectedID = recentItems.first?.id
+        }
     }
 
     private func installKeyMonitor() {
@@ -85,28 +91,56 @@ struct QuickSwitcherView: View {
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
-        if Int(event.keyCode) == kVK_Escape {
+        let shiftHeld = event.modifierFlags.contains(.shift)
+        switch Int(event.keyCode) {
+        case kVK_Escape:
             onClose()
             return true
+        case kVK_DownArrow:
+            moveSelection(by: 1)
+            return true
+        case kVK_UpArrow:
+            moveSelection(by: -1)
+            return true
+        case kVK_Return:
+            if let id = selectedID,
+               let item = recentItems.first(where: { $0.id == id }) {
+                onActivate(item, shiftHeld)
+            }
+            return true
+        default:
+            break
         }
-        // `charactersIgnoringModifiers` keeps the digit visible even with
-        // Shift held, so `Shift+1` still resolves to "1" — we then inspect
-        // the modifier flags separately to decide whether to invert
-        // plain-text mode for that paste.
-        if let chars = event.charactersIgnoringModifiers,
-           let n = Int(chars),
+        // Key off the hardware key code, not `charactersIgnoringModifiers`.
+        // That property special-cases Shift: on a US layout, Shift+1 reports
+        // "!" rather than "1", so `Int(chars)` was returning nil and the
+        // event was being passed through unhandled.
+        if let n = Self.digitKeyCodes[Int(event.keyCode)],
            n >= 1, n <= recentItems.count {
-            let shiftHeld = event.modifierFlags.contains(.shift)
             onActivate(recentItems[n - 1], shiftHeld)
             return true
         }
         return false
     }
+
+    private func moveSelection(by delta: Int) {
+        guard !recentItems.isEmpty else { return }
+        let currentIdx = recentItems.firstIndex(where: { $0.id == selectedID }) ?? -1
+        let newIdx = max(0, min(recentItems.count - 1, currentIdx + delta))
+        selectedID = recentItems[newIdx].id
+    }
+
+    private static let digitKeyCodes: [Int: Int] = [
+        kVK_ANSI_1: 1, kVK_ANSI_2: 2, kVK_ANSI_3: 3,
+        kVK_ANSI_4: 4, kVK_ANSI_5: 5, kVK_ANSI_6: 6,
+        kVK_ANSI_7: 7, kVK_ANSI_8: 8, kVK_ANSI_9: 9,
+    ]
 }
 
 private struct QuickSwitcherRow: View {
     let item: ClipboardItem
     let shortcut: String
+    let isSelected: Bool
     let onTap: (_ shiftHeld: Bool) -> Void
 
     var body: some View {
@@ -133,6 +167,10 @@ private struct QuickSwitcherRow: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
