@@ -94,9 +94,125 @@ struct PreferencesView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Section {
+                ExcludedAppsControl(preferences: preferences)
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("CopyCauldron skips every copied item whose source app is on this list. Browser extensions appear as their host browser.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 760)
+        .frame(width: 500, height: 860)
+    }
+}
+
+private struct ExcludedAppsControl: View {
+    @ObservedObject var preferences: Preferences
+    @State private var selectedBundleIDs: Set<String> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if preferences.excludedApps.isEmpty {
+                Text("No excluded apps")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                List(selection: $selectedBundleIDs) {
+                    ForEach(preferences.excludedApps) { app in
+                        HStack(spacing: 8) {
+                            ExcludedAppIcon(bundleIdentifier: app.bundleIdentifier)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(app.displayName)
+                                Text(app.bundleIdentifier)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(app.bundleIdentifier)
+                    }
+                }
+                .frame(height: 138)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    chooseApps()
+                } label: {
+                    Label("Add App...", systemImage: "plus")
+                }
+                Button {
+                    preferences.removeExcludedApps(bundleIdentifiers: selectedBundleIDs)
+                    selectedBundleIDs = []
+                } label: {
+                    Label("Remove", systemImage: "minus")
+                }
+                .disabled(selectedBundleIDs.isEmpty)
+            }
+            .buttonStyle(.bordered)
+        }
+        .onChange(of: preferences.excludedApps) { apps in
+            let currentIDs = Set(apps.map(\.bundleIdentifier))
+            selectedBundleIDs = selectedBundleIDs.intersection(currentIDs)
+        }
+    }
+
+    private func chooseApps() {
+        guard let urls = AppBundleResolver.chooseApplicationURLs() else { return }
+        var addedBundleIDs: Set<String> = []
+        for url in urls {
+            if let bundleIdentifier = addApp(at: url) {
+                addedBundleIDs.insert(bundleIdentifier)
+            }
+        }
+        selectedBundleIDs = addedBundleIDs
+    }
+
+    private func addApp(at url: URL) -> String? {
+        guard let app = AppBundleResolver.excludedAppInfo(at: url) else {
+            presentInvalidAppAlert(url)
+            return nil
+        }
+        preferences.addExcludedApp(app)
+        return app.bundleIdentifier
+    }
+
+    private func presentInvalidAppAlert(_ url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "Can't Add App"
+        alert.informativeText = "\(url.lastPathComponent) does not expose a bundle identifier."
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+}
+
+private struct ExcludedAppIcon: View {
+    let bundleIdentifier: String
+    @State private var icon: NSImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+            } else {
+                Image(systemName: "app")
+                    .resizable()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .onAppear {
+            icon = AppIconProvider.icon(
+                bundleIdentifier: bundleIdentifier,
+                size: NSSize(width: 24, height: 24)
+            )
+        }
     }
 }
 

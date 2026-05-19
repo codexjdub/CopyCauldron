@@ -1,6 +1,25 @@
 import Foundation
 
+struct TextPastePayload {
+    let string: String
+    let rtfData: Data?
+    let htmlData: Data?
+}
+
 enum TextPasteTransform {
+    static func payload(
+        string: String,
+        rtfData: Data?,
+        htmlData: Data?,
+        plainTextOnly: Bool
+    ) -> TextPastePayload {
+        TextPastePayload(
+            string: plainTextOnly ? compactPlainText(string) : string,
+            rtfData: plainTextOnly ? nil : rtfData,
+            htmlData: plainTextOnly ? nil : htmlData
+        )
+    }
+
     static func compactPlainText(_ text: String) -> String {
         let normalized = text
             .replacingOccurrences(of: "\r\n", with: "\n")

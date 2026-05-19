@@ -23,7 +23,10 @@ private final class FloatingPanel: NSPanel {
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
     let store = ClipboardStore()
     let preferences = Preferences()
-    private(set) lazy var monitor = ClipboardMonitor(store: store)
+    private(set) lazy var monitor = ClipboardMonitor(
+        store: store,
+        preferences: preferences
+    )
     private let hotKeyManager = HotKeyManager(id: 1)
     private let quickSwitcherHotKeyManager = HotKeyManager(id: 2)
 
@@ -525,14 +528,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool) {
-        store.copyToPasteboard(item, plainTextOnly: plainTextOnly)
-        monitor.suppressCurrentChangeCount()
+        writeToPasteboard {
+            store.copyToPasteboard(item, plainTextOnly: plainTextOnly)
+        }
     }
 
     private func copyPathsToPasteboard(_ urls: [URL]) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+        writeToPasteboard {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+        }
+    }
+
+    private func writeToPasteboard(_ write: () -> Void) {
+        write()
         monitor.suppressCurrentChangeCount()
     }
 

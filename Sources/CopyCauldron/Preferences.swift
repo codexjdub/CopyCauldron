@@ -61,6 +61,17 @@ enum TextSize: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+struct ExcludedAppInfo: Codable, Equatable, Identifiable {
+    let bundleIdentifier: String
+    var name: String
+
+    var id: String { bundleIdentifier }
+
+    var displayName: String {
+        name.isEmpty ? bundleIdentifier : name
+    }
+}
+
 private struct TextScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1.0
 }
@@ -93,6 +104,7 @@ final class Preferences: ObservableObject {
     private let maxHistoryItemsKey = "maxHistoryItems"
     private let textSizeKey = "textSize"
     private let retentionPeriodKey = "retentionPeriod"
+    private let excludedAppsKey = "excludedApps"
     static let defaultMaxPinnedItems = 20
     static let pinnedItemsRange = 1...100
     static let defaultMaxHistoryItems = 50
@@ -153,6 +165,10 @@ final class Preferences: ObservableObject {
 
     @Published var retentionPeriod: RetentionPeriod {
         didSet { defaults.set(retentionPeriod.rawValue, forKey: retentionPeriodKey) }
+    }
+
+    @Published var excludedApps: [ExcludedAppInfo] {
+        didSet { saveExcludedApps() }
     }
 
     /// Persisted panel size (read at launch, written by drag-to-resize).
@@ -240,6 +256,31 @@ final class Preferences: ObservableObject {
         self.textSize = storedTextSize ?? .medium
         let storedRetention = defaults.string(forKey: retentionPeriodKey).flatMap(RetentionPeriod.init(rawValue:))
         self.retentionPeriod = storedRetention ?? .off
+        if let data = defaults.data(forKey: excludedAppsKey),
+           let decoded = try? JSONDecoder().decode([ExcludedAppInfo].self, from: data) {
+            self.excludedApps = decoded
+        } else {
+            self.excludedApps = []
+        }
+    }
+
+    func addExcludedApp(_ app: ExcludedAppInfo) {
+        guard !app.bundleIdentifier.isEmpty else { return }
+        var apps = excludedApps.filter { $0.bundleIdentifier != app.bundleIdentifier }
+        apps.append(app)
+        excludedApps = apps.sorted {
+            $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    func removeExcludedApps(bundleIdentifiers: Set<String>) {
+        guard !bundleIdentifiers.isEmpty else { return }
+        excludedApps.removeAll { bundleIdentifiers.contains($0.bundleIdentifier) }
+    }
+
+    func isExcluded(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return excludedApps.contains { $0.bundleIdentifier == bundleIdentifier }
     }
 
     private func saveHotKey() {
@@ -251,6 +292,12 @@ final class Preferences: ObservableObject {
     private func saveQuickSwitcherHotKey() {
         if let data = try? JSONEncoder().encode(quickSwitcherHotKey) {
             defaults.set(data, forKey: quickSwitcherHotKeyKey)
+        }
+    }
+
+    private func saveExcludedApps() {
+        if let data = try? JSONEncoder().encode(excludedApps) {
+            defaults.set(data, forKey: excludedAppsKey)
         }
     }
 }

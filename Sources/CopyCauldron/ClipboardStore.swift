@@ -230,22 +230,21 @@ final class ClipboardStore: ObservableObject {
         pb.clearContents()
         switch item.content {
         case .text(let s):
-            let pasteString = plainTextOnly
-                ? TextPasteTransform.compactPlainText(s)
-                : s
+            let payload = TextPasteTransform.payload(
+                string: s,
+                rtfData: item.rtfData,
+                htmlData: item.htmlData,
+                plainTextOnly: plainTextOnly
+            )
             // Declare all the types we'll write up front so the target app
             // sees the full set.
             var types: [NSPasteboard.PasteboardType] = [.string]
-            if !plainTextOnly {
-                if item.rtfData  != nil { types.append(.rtf) }
-                if item.htmlData != nil { types.append(.html) }
-            }
+            if payload.rtfData != nil { types.append(.rtf) }
+            if payload.htmlData != nil { types.append(.html) }
             pb.declareTypes(types, owner: nil)
-            pb.setString(pasteString, forType: .string)
-            if !plainTextOnly {
-                if let rtf  = item.rtfData  { pb.setData(rtf,  forType: .rtf)  }
-                if let html = item.htmlData { pb.setData(html, forType: .html) }
-            }
+            pb.setString(payload.string, forType: .string)
+            if let rtfData = payload.rtfData { pb.setData(rtfData, forType: .rtf) }
+            if let htmlData = payload.htmlData { pb.setData(htmlData, forType: .html) }
         case .image(let filename):
             if let data = try? Data(contentsOf: imageURL(for: filename)),
                let image = NSImage(data: data) {
