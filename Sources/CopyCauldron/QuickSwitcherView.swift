@@ -10,6 +10,7 @@ import Carbon.HIToolbox
 /// paste, matching the main panel's behavior.
 struct QuickSwitcherView: View {
     @ObservedObject var store: ClipboardStore
+    @ObservedObject var preferences: Preferences
     /// Called when the user picks an item. The second argument is `true`
     /// when `Shift` was held — used to invert plain-text-only mode for
     /// that one paste.
@@ -18,10 +19,6 @@ struct QuickSwitcherView: View {
 
     @State private var keyMonitor: Any?
     @State private var recentItems: [ClipboardItem] = []
-
-    /// We deliberately cap at 4 — number keys `1`–`4` are easy to reach
-    /// without looking, which is the whole point of the HUD.
-    static let maxItems = 4
 
     var body: some View {
         VStack(spacing: 2) {
@@ -60,10 +57,17 @@ struct QuickSwitcherView: View {
             // `@Published`-willSet gotcha as PanelView.
             refreshItems(from: newItems)
         }
+        .onChange(of: preferences.quickSwitcherItemCount) { _ in
+            // User bumped the row count from Preferences while the HUD
+            // wasn't visible; refresh in case it ever shows back up
+            // without a fresh `.onAppear` (rare, but cheap to handle).
+            refreshItems(from: store.items)
+        }
     }
 
     private func refreshItems(from items: [ClipboardItem]) {
-        recentItems = Array(items.filter { !$0.isPinned }.prefix(Self.maxItems))
+        let count = preferences.quickSwitcherItemCount
+        recentItems = Array(items.filter { !$0.isPinned }.prefix(count))
     }
 
     private func installKeyMonitor() {

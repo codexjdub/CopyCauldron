@@ -7,19 +7,15 @@ struct PreferencesView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Open panel") {
+                LabeledContent("Shortcut") {
                     HotKeyRecorder(hotKey: $preferences.hotKey)
                 }
-                LabeledContent("Quick switcher") {
-                    HotKeyRecorder(hotKey: $preferences.quickSwitcherHotKey)
-                }
             } header: {
-                Text("Global Shortcuts")
+                Text("Global Shortcut")
             } footer: {
-                Text("Press a key combo with at least one modifier (⌘ ⇧ ⌃ ⌥). Press ⎋ to cancel. The quick switcher pops a small 4-row HUD near your cursor — press 1–4 to paste.")
+                Text("Press a key combo with at least one modifier (⌘ ⇧ ⌃ ⌥). Press ⎋ to cancel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
@@ -80,9 +76,27 @@ struct PreferencesView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+
+            Section {
+                LabeledContent("Hotkey") {
+                    HotKeyRecorder(hotKey: $preferences.quickSwitcherHotKey)
+                }
+                Stepper(
+                    "Items shown: \(preferences.quickSwitcherItemCount)",
+                    value: $preferences.quickSwitcherItemCount,
+                    in: Preferences.quickSwitcherItemRange
+                )
+            } header: {
+                Text("Quick Switcher")
+            } footer: {
+                Text("A compact HUD pops near your cursor with your most recent unpinned items; press 1–\(preferences.quickSwitcherItemCount) to paste, Shift+number to invert plain-text mode, ⎋ to dismiss.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 650)
+        .frame(width: 460, height: 760)
     }
 }
 

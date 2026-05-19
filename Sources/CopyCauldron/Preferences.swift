@@ -78,6 +78,7 @@ final class Preferences: ObservableObject {
     private let defaults = UserDefaults.standard
     private let hotKeyKey = "hotKey"
     private let quickSwitcherHotKeyKey = "quickSwitcherHotKey"
+    private let quickSwitcherItemCountKey = "quickSwitcherItemCount"
     private let openOnHoverKey = "openOnHover"
     private let maxPinnedItemsKey = "maxPinnedItems"
     // Note: these UserDefaults string keys keep their historical names so
@@ -97,6 +98,10 @@ final class Preferences: ObservableObject {
     static let defaultMaxHistoryItems = 50
     static let historyItemsRange = 10...500
     static let historyItemsStep = 1
+    static let defaultQuickSwitcherItemCount = 4
+    /// Capped at 9 because the quick switcher's whole appeal is one-key
+    /// activation via the digit row — going higher breaks the gesture.
+    static let quickSwitcherItemRange = 2...9
     static let defaultPanelSize = CGSize(width: 360, height: 480)
     static let minPanelSize = CGSize(width: 280, height: 320)
     static let maxPanelSize = CGSize(width: 700, height: 900)
@@ -107,6 +112,10 @@ final class Preferences: ObservableObject {
 
     @Published var quickSwitcherHotKey: HotKey {
         didSet { saveQuickSwitcherHotKey() }
+    }
+
+    @Published var quickSwitcherItemCount: Int {
+        didSet { defaults.set(quickSwitcherItemCount, forKey: quickSwitcherItemCountKey) }
     }
 
     @Published var openOnHover: Bool {
@@ -212,6 +221,12 @@ final class Preferences: ObservableObject {
         } else {
             self.quickSwitcherHotKey = .defaultQuickSwitcherHotKey
         }
+        let storedQSCount = defaults.integer(forKey: quickSwitcherItemCountKey)
+        // `defaults.integer` returns 0 when the key is missing; treat anything
+        // outside the supported range as "use the default."
+        self.quickSwitcherItemCount = Self.quickSwitcherItemRange.contains(storedQSCount)
+            ? storedQSCount
+            : Self.defaultQuickSwitcherItemCount
         self.launchAtLogin = LaunchAtLogin.isEnabled
         self.openOnHover = defaults.bool(forKey: openOnHoverKey)
         let storedMax = defaults.integer(forKey: maxPinnedItemsKey)

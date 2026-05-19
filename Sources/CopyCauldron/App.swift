@@ -531,11 +531,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     // MARK: – Quick switcher (HUD)
 
     private func setUpQuickSwitcherPanel() {
-        // Fixed width, tight height — the SwiftUI content sizes itself
-        // around its 4 rows plus padding.
-        let size = NSSize(width: 320, height: 200)
+        // Fixed width; height grows with the user's chosen row count.
+        let initialSize = NSSize(
+            width: Self.quickSwitcherWidth,
+            height: Self.quickSwitcherHeight(forRowCount: preferences.quickSwitcherItemCount)
+        )
         quickSwitcherPanel = FloatingPanel(
-            contentRect: NSRect(origin: .zero, size: size),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -552,6 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let hostingController = NSHostingController(
             rootView: QuickSwitcherView(
                 store: store,
+                preferences: preferences,
                 onActivate: { [weak self] item, shiftHeld in
                     self?.activateFromQuickSwitcher(item, invertPlainText: shiftHeld)
                 },
@@ -563,6 +566,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         hostingController.view.wantsLayer = true
         hostingController.view.layer?.backgroundColor = NSColor.clear.cgColor
         quickSwitcherPanel.contentViewController = hostingController
+    }
+
+    private static let quickSwitcherWidth: CGFloat = 320
+
+    /// Empirically-derived height that fits the row layout in
+    /// `QuickSwitcherView`: ~32pt per row plus 2pt inter-row spacing plus
+    /// 24pt of chrome (outer padding + rounded border).
+    private static func quickSwitcherHeight(forRowCount count: Int) -> CGFloat {
+        let chrome: CGFloat = 24
+        let perRow: CGFloat = 32
+        let spacing: CGFloat = max(0, CGFloat(count - 1)) * 2
+        return chrome + perRow * CGFloat(count) + spacing
     }
 
     private func setUpQuickSwitcherHotKey() {
@@ -593,8 +608,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
         NSApp.activate(ignoringOtherApps: true)
 
+        // Resize before show in case the user changed the row count via
+        // Preferences while the HUD was hidden.
+        let size = NSSize(
+            width: Self.quickSwitcherWidth,
+            height: Self.quickSwitcherHeight(forRowCount: preferences.quickSwitcherItemCount)
+        )
+        quickSwitcherPanel.setContentSize(size)
         let mouseLocation = NSEvent.mouseLocation
-        let size = quickSwitcherPanel.frame.size
         let origin = clampedQuickSwitcherOrigin(near: mouseLocation, size: size)
         quickSwitcherPanel.setFrameOrigin(origin)
         quickSwitcherPanel.makeKeyAndOrderFront(nil)
