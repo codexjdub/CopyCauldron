@@ -249,6 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 onClose: { [weak self] in
                     self?.closePanel()
                 },
+                onCopyPathAsText: { [weak self] urls in
+                    self?.copyPathsToPasteboard(urls)
+                },
                 initialSize: initialSize,
                 panelOpened: panelOpenedSubject.eraseToAnyPublisher()
             )
@@ -526,6 +529,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         monitor.suppressCurrentChangeCount()
     }
 
+    private func copyPathsToPasteboard(_ urls: [URL]) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+        monitor.suppressCurrentChangeCount()
+    }
+
     // MARK: – Quick switcher (HUD)
 
     private func setUpQuickSwitcherPanel() {
@@ -675,6 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             kAXFocusedUIElementAttribute as CFString,
             &focusedRaw
         ) == .success, let focused = focusedRaw else { return nil }
+        guard CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
         let focusedElement = focused as! AXUIElement
 
         var rangeRaw: AnyObject?
@@ -692,8 +703,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             &boundsRaw
         ) == .success, let boundsValue = boundsRaw else { return nil }
 
+        guard CFGetTypeID(boundsValue) == AXValueGetTypeID() else { return nil }
+        let axValue = boundsValue as! AXValue
         var axRect = CGRect.zero
-        guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &axRect),
+        guard AXValueGetValue(axValue, .cgRect, &axRect),
               axRect.height > 0 else { return nil }
 
         // AX is top-left-origin in the global coordinate space of the

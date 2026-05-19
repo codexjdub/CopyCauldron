@@ -106,7 +106,7 @@ Open via the gear icon in the panel footer or by right-clicking the menu-bar ico
 - **History** — total history size (10–500), max pinned items (1–100), auto-expire window.
 - **Quick Switcher** — record the HUD hotkey, and choose how many rows it shows (2–9).
 
-The "Plain" chip in the panel footer toggles plain-text-only pasting for text items; hold `Shift` while activating (or pressing a digit shortcut) to invert it for a single paste.
+The "Plain" chip in the panel footer toggles plain-text-only pasting for text items, stripping rich formatting and compacting runs of extra blank lines; hold `Shift` while activating (or pressing a digit shortcut) to invert it for a single paste.
 
 ## Privacy
 

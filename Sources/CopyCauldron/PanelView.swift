@@ -11,6 +11,7 @@ struct PanelView: View {
     let onCopy: (ClipboardItem, Bool) -> Void
     let onPreferences: () -> Void
     let onClose: () -> Void
+    let onCopyPathAsText: ([URL]) -> Void
     let initialSize: CGSize
     let panelOpened: AnyPublisher<Void, Never>
 
@@ -33,6 +34,7 @@ struct PanelView: View {
         onCopy: @escaping (ClipboardItem, Bool) -> Void,
         onPreferences: @escaping () -> Void,
         onClose: @escaping () -> Void,
+        onCopyPathAsText: @escaping ([URL]) -> Void,
         initialSize: CGSize,
         panelOpened: AnyPublisher<Void, Never>
     ) {
@@ -41,6 +43,7 @@ struct PanelView: View {
         self.onCopy = onCopy
         self.onPreferences = onPreferences
         self.onClose = onClose
+        self.onCopyPathAsText = onCopyPathAsText
         self.initialSize = initialSize
         self.panelOpened = panelOpened
         // Seed the @State caches from the current store snapshot so the first
@@ -121,6 +124,7 @@ struct PanelView: View {
                                     isSelected: item.id == selectedID,
                                     plainTextOnly: preferences.pastePlainTextOnly,
                                     onCopy: onCopy,
+                                    onCopyPathAsText: onCopyPathAsText,
                                     onLingerHover: { lingeringID in
                                         previewItemID = lingeringID
                                     }
@@ -366,8 +370,8 @@ struct PanelView: View {
             }
             .buttonStyle(.plain)
             .help(preferences.pastePlainTextOnly
-                  ? "Plain-text paste is ON — strips rich formatting. Click to allow rich text."
-                  : "Plain-text paste is OFF — rich text preserved. Click to strip formatting.")
+                  ? "Plain-text paste is ON — strips rich formatting and extra blank lines. Click to allow rich text."
+                  : "Plain-text paste is OFF — rich text preserved. Click to strip formatting and compact spacing.")
             Button {
                 onPreferences()
             } label: {
@@ -772,6 +776,7 @@ private struct ItemRow: View {
     let isSelected: Bool
     let plainTextOnly: Bool
     let onCopy: (ClipboardItem, Bool) -> Void
+    let onCopyPathAsText: ([URL]) -> Void
     /// Called with the item's id when the cursor has lingered on the row long
     /// enough to show a preview, or nil when the cursor leaves.
     let onLingerHover: (UUID?) -> Void
@@ -883,8 +888,11 @@ private struct ItemRow: View {
     private var dragPayload: RowDragPayload {
         switch item.content {
         case .text(let s):
+            let dragString = plainTextOnly
+                ? TextPasteTransform.compactPlainText(s)
+                : s
             return .text(
-                s,
+                dragString,
                 rtfData: plainTextOnly ? nil : item.rtfData,
                 htmlData: plainTextOnly ? nil : item.htmlData
             )
@@ -918,7 +926,7 @@ private struct ItemRow: View {
             }
             // Path copy still works even when files are missing — the path
             // string is sometimes useful on its own (logs, error reports).
-            Button("Copy path as text") { copyPathAsText(resolved.map(\.url)) }
+            Button("Copy path as text") { onCopyPathAsText(resolved.map(\.url)) }
         case .image(let filename):
             Button("Save as…") { saveImageAs(filename) }
             Button("Open in Preview") { openImage(filename) }
@@ -939,12 +947,6 @@ private struct ItemRow: View {
         for url in urls {
             NSWorkspace.shared.open(url)
         }
-    }
-
-    private func copyPathAsText(_ urls: [URL]) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
     }
 
     // MARK: – Image actions

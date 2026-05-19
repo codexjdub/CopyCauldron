@@ -223,13 +223,16 @@ final class ClipboardStore: ObservableObject {
     // MARK: – Pasteboard write-back
 
     /// Writes the item back to the system pasteboard so the user can ⌘V.
-    /// When `plainTextOnly` is true, attached RTF/HTML is skipped — useful for
-    /// pasting into editors that misinterpret rich formatting.
+    /// When `plainTextOnly` is true, attached RTF/HTML is skipped and excessive
+    /// blank lines are compacted for pasting into plain-text editors.
     func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool = false) {
         let pb = NSPasteboard.general
         pb.clearContents()
         switch item.content {
         case .text(let s):
+            let pasteString = plainTextOnly
+                ? TextPasteTransform.compactPlainText(s)
+                : s
             // Declare all the types we'll write up front so the target app
             // sees the full set.
             var types: [NSPasteboard.PasteboardType] = [.string]
@@ -238,7 +241,7 @@ final class ClipboardStore: ObservableObject {
                 if item.htmlData != nil { types.append(.html) }
             }
             pb.declareTypes(types, owner: nil)
-            pb.setString(s, forType: .string)
+            pb.setString(pasteString, forType: .string)
             if !plainTextOnly {
                 if let rtf  = item.rtfData  { pb.setData(rtf,  forType: .rtf)  }
                 if let html = item.htmlData { pb.setData(html, forType: .html) }
@@ -248,8 +251,11 @@ final class ClipboardStore: ObservableObject {
                let image = NSImage(data: data) {
                 pb.writeObjects([image])
             }
-        case .fileURLs(let paths):
-            let urls = paths.map { URL(fileURLWithPath: $0) as NSURL }
+        case .fileURLs:
+            let urls = item
+                .resolveAllFileURLs()
+                .filter(\.exists)
+                .map { $0.url as NSURL }
             pb.writeObjects(urls)
         }
     }
