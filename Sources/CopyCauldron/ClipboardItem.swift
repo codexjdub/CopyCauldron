@@ -35,6 +35,16 @@ enum ClipboardContent: Codable, Equatable {
     }
 }
 
+struct SourceAppInfo: Codable, Equatable {
+    let bundleIdentifier: String?
+    let name: String
+
+    var displayName: String {
+        if !name.isEmpty { return name }
+        return bundleIdentifier ?? "Unknown App"
+    }
+}
+
 struct ClipboardItem: Identifiable, Codable, Equatable {
     let id: UUID
     let timestamp: Date
@@ -66,6 +76,10 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// re-replace-occurrences inside the SwiftUI body on every render.
     /// Not persisted — recomputed on every load.
     let displayTitle: String
+    /// Best-effort source app metadata captured from the frontmost app when
+    /// the pasteboard change is observed. Browser extensions appear as their
+    /// host browser because macOS only exposes the owning app process.
+    let sourceApp: SourceAppInfo?
     /// Bookmark data per file URL (one entry per path in `.fileURLs(_)`).
     /// Persisted via SQLite (not JSON) so we can survive renames and moves
     /// — `URL.bookmarkData()` tracks files by inode, not path. `nil` for
@@ -82,6 +96,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         pinnedAt: Date? = nil,
         rtfData: Data? = nil,
         htmlData: Data? = nil,
+        sourceApp: SourceAppInfo? = nil,
         fileURLBookmarks: [Data]? = nil
     ) {
         self.id = id
@@ -91,9 +106,13 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.pinnedAt = pinnedAt
         self.rtfData = rtfData
         self.htmlData = htmlData
+        self.sourceApp = sourceApp
         self.fileURLBookmarks = fileURLBookmarks
         self.textKind = Self.computeKind(from: content)
-        self.lowercasedSearchableText = Self.computeSearchableText(from: content)
+        self.lowercasedSearchableText = Self.computeSearchableText(
+            from: content,
+            sourceApp: sourceApp
+        )
         self.displayTitle = Self.computeDisplayTitle(from: content)
     }
 
@@ -102,12 +121,26 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         return .plain
     }
 
-    private static func computeSearchableText(from content: ClipboardContent) -> String {
+    private static func computeSearchableText(
+        from content: ClipboardContent,
+        sourceApp: SourceAppInfo?
+    ) -> String {
+        var parts: [String]
         switch content {
-        case .text(let s):       return s.lowercased()
-        case .image:             return "image"
-        case .fileURLs(let ps):  return ps.joined(separator: " ").lowercased()
+        case .text(let s):
+            parts = [s]
+        case .image:
+            parts = ["image"]
+        case .fileURLs(let ps):
+            parts = [ps.joined(separator: " ")]
         }
+        if let sourceApp {
+            parts.append(sourceApp.displayName)
+            if let bundleIdentifier = sourceApp.bundleIdentifier {
+                parts.append(bundleIdentifier)
+            }
+        }
+        return parts.joined(separator: " ").lowercased()
     }
 
     private static func computeDisplayTitle(from content: ClipboardContent) -> String {
@@ -131,7 +164,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, content, isPinned, pinnedAt, rtfData, htmlData
+        case id, timestamp, content, isPinned, pinnedAt, rtfData, htmlData, sourceApp
     }
 
     init(from decoder: Decoder) throws {
@@ -150,12 +183,16 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         }
         self.rtfData = try? c.decode(Data.self, forKey: .rtfData)
         self.htmlData = try? c.decode(Data.self, forKey: .htmlData)
+        self.sourceApp = try? c.decode(SourceAppInfo.self, forKey: .sourceApp)
         // `fileURLBookmarks` is intentionally not in CodingKeys — bookmarks
         // are persisted via SQLite, not the (now-dead) JSON path. Older
         // decoded items just get nil here.
         self.fileURLBookmarks = nil
         self.textKind = Self.computeKind(from: self.content)
-        self.lowercasedSearchableText = Self.computeSearchableText(from: self.content)
+        self.lowercasedSearchableText = Self.computeSearchableText(
+            from: self.content,
+            sourceApp: self.sourceApp
+        )
         self.displayTitle = Self.computeDisplayTitle(from: self.content)
     }
 
@@ -171,6 +208,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         try c.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
         try c.encodeIfPresent(rtfData, forKey: .rtfData)
         try c.encodeIfPresent(htmlData, forKey: .htmlData)
+        try c.encodeIfPresent(sourceApp, forKey: .sourceApp)
     }
 
     var iconSystemName: String {

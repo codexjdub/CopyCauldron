@@ -9,6 +9,7 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 
 - **Universal capture** — text, file URLs (copied from Finder), and images (e.g. `⌘⌃⇧4` screenshots). Image files (PNG/JPG/HEIC/etc.) get inline thumbnails.
 - **Smart row icons** — text items are auto-categorized: URL, email, hex color (with a real color swatch), JSON, IP, UUID, Git SHA, Unix/ISO timestamp, base64, currency, hashtag, mention, phone.
+- **Source app context** — new clipboard items remember the best-effort source app, show it in row metadata, and include app names / bundle IDs in search.
 - **Search** — instant filter across the entire history.
 - **Hover preview** — linger on a long text item for ~600ms to see a scrollable preview without copying it.
 - **Pinned items** — keep favorites at the top, immune from the history-size cap and the Clear button. Configurable max (default 20, up to 100).

@@ -65,6 +65,7 @@ final class ClipboardMonitor {
            types.contains(where: Self.concealedTypes.contains) {
             return nil
         }
+        let sourceApp = currentSourceApp()
 
         // File URLs first — many apps put both file URLs and a text fallback on
         // the pasteboard; we want to treat it as files.
@@ -88,22 +89,29 @@ final class ClipboardMonitor {
             let resolvedBookmarks: [Data]? = bookmarks.allSatisfy(\.isEmpty) ? nil : bookmarks
             return ClipboardItem(
                 content: .fileURLs(paths),
+                sourceApp: sourceApp,
                 fileURLBookmarks: resolvedBookmarks
             )
         }
 
         // Image
         if let types = pasteboard.types,
-           types.contains(.tiff) || types.contains(.png) {
+            types.contains(.tiff) || types.contains(.png) {
             if let data = pasteboard.data(forType: .png) {
                 let filename = store.saveImage(data, ext: "png")
-                return ClipboardItem(content: .image(filename: filename))
+                return ClipboardItem(
+                    content: .image(filename: filename),
+                    sourceApp: sourceApp
+                )
             }
             if let tiff = pasteboard.data(forType: .tiff),
                let rep = NSBitmapImageRep(data: tiff),
                let png = rep.representation(using: .png, properties: [:]) {
                 let filename = store.saveImage(png, ext: "png")
-                return ClipboardItem(content: .image(filename: filename))
+                return ClipboardItem(
+                    content: .image(filename: filename),
+                    sourceApp: sourceApp
+                )
             }
         }
 
@@ -111,10 +119,25 @@ final class ClipboardMonitor {
         if let s = pasteboard.string(forType: .string), !s.isEmpty {
             let rtf  = pasteboard.data(forType: .rtf)
             let html = pasteboard.data(forType: .html)
-            return ClipboardItem(content: .text(s), rtfData: rtf, htmlData: html)
+            return ClipboardItem(
+                content: .text(s),
+                rtfData: rtf,
+                htmlData: html,
+                sourceApp: sourceApp
+            )
         }
 
         return nil
+    }
+
+    private func currentSourceApp() -> SourceAppInfo? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        guard app.bundleIdentifier != Bundle.main.bundleIdentifier else { return nil }
+        guard app.bundleIdentifier != nil || app.localizedName != nil else { return nil }
+        return SourceAppInfo(
+            bundleIdentifier: app.bundleIdentifier,
+            name: app.localizedName ?? app.bundleIdentifier ?? "Unknown App"
+        )
     }
 
     /// Refresh the change-count baseline after we wrote to the pasteboard

@@ -59,6 +59,19 @@ final class HistoryDatabase {
                 t.add(column: "file_urls_bookmarks_json", .text)
             }
         }
+        m.registerMigration("v3_source_app_capture") { db in
+            // Best-effort source app metadata captured when the pasteboard
+            // change is observed. Existing rows remain nil.
+            try db.alter(table: "items") { t in
+                t.add(column: "source_app_bundle_id", .text)
+                t.add(column: "source_app_name", .text)
+            }
+            try db.create(
+                index: "idx_items_source_app_bundle_id",
+                on: "items",
+                columns: ["source_app_bundle_id"]
+            )
+        }
         return m
     }
 
@@ -226,6 +239,8 @@ final class HistoryDatabase {
         var imageFilename: String?
         var fileUrlsJson: String?
         var fileUrlsBookmarksJson: String?
+        var sourceAppBundleID: String?
+        var sourceAppName: String?
         var rtfData: Data?
         var htmlData: Data?
         var isPinned: Bool
@@ -239,6 +254,8 @@ final class HistoryDatabase {
             case imageFilename          = "image_filename"
             case fileUrlsJson           = "file_urls_json"
             case fileUrlsBookmarksJson  = "file_urls_bookmarks_json"
+            case sourceAppBundleID      = "source_app_bundle_id"
+            case sourceAppName          = "source_app_name"
             case rtfData                = "rtf_data"
             case htmlData               = "html_data"
             case isPinned               = "is_pinned"
@@ -290,6 +307,8 @@ final class HistoryDatabase {
             imageFilename: imageFilename,
             fileUrlsJson: fileUrlsJson,
             fileUrlsBookmarksJson: fileUrlsBookmarksJson,
+            sourceAppBundleID: item.sourceApp?.bundleIdentifier,
+            sourceAppName: item.sourceApp?.displayName,
             rtfData: item.rtfData,
             htmlData: item.htmlData,
             isPinned: item.isPinned,
@@ -325,7 +344,19 @@ final class HistoryDatabase {
             pinnedAt: record.pinnedAt,
             rtfData: record.rtfData,
             htmlData: record.htmlData,
+            sourceApp: sourceApp(from: record),
             fileURLBookmarks: bookmarks
+        )
+    }
+
+    private static func sourceApp(from record: Record) -> SourceAppInfo? {
+        guard record.sourceAppBundleID != nil || record.sourceAppName != nil else {
+            return nil
+        }
+        let name = record.sourceAppName ?? record.sourceAppBundleID ?? "Unknown App"
+        return SourceAppInfo(
+            bundleIdentifier: record.sourceAppBundleID,
+            name: name
         )
     }
 

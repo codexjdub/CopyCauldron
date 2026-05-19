@@ -730,6 +730,41 @@ private func presentFileGoneAlert() {
     alert.runModal()
 }
 
+private struct SourceAppIcon: View {
+    let sourceApp: SourceAppInfo
+    @State private var icon: NSImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "app")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 12, height: 12)
+        .onAppear {
+            icon = Self.loadIcon(for: sourceApp)
+        }
+    }
+
+    private static func loadIcon(for sourceApp: SourceAppInfo) -> NSImage? {
+        guard let bundleIdentifier = sourceApp.bundleIdentifier,
+              let url = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: bundleIdentifier
+              ) else {
+            return nil
+        }
+        let image = NSWorkspace.shared.icon(forFile: url.path)
+        image.size = NSSize(width: 16, height: 16)
+        return image
+    }
+}
+
 private struct ItemRow: View {
     let item: ClipboardItem
     let store: ClipboardStore
@@ -803,9 +838,7 @@ private struct ItemRow: View {
                     .font(.system(size: 13 * textScale))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text(item.timestamp.formatted(.relative(presentation: .named)))
-                    .font(.system(size: 11 * textScale))
-                    .foregroundStyle(.secondary)
+                subtitle
             }
             Spacer()
             if let label = shortcutLabel {
@@ -828,6 +861,23 @@ private struct ItemRow: View {
                 onCopy(item, shiftHeld)
             }
         }
+    }
+
+    private var subtitle: some View {
+        HStack(spacing: 4) {
+            if let sourceApp = item.sourceApp {
+                SourceAppIcon(sourceApp: sourceApp)
+                Text(sourceApp.displayName)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(sourceApp.bundleIdentifier ?? sourceApp.displayName)
+                Text("·")
+            }
+            Text(item.timestamp.formatted(.relative(presentation: .named)))
+                .lineLimit(1)
+        }
+        .font(.system(size: 11 * textScale))
+        .foregroundStyle(.secondary)
     }
 
     private var dragPayload: RowDragPayload {
