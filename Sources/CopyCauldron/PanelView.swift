@@ -18,6 +18,11 @@ struct PanelView: View {
     @State private var query: String = ""
     @State private var selectedID: UUID?
     @State private var previewItemID: UUID?
+    /// Rows the user has Cmd-clicked into a "drag-out together" set.
+    /// Separate from `selectedID` (the keyboard cursor); it doesn't drive
+    /// paste / Return, only the drag payload. Cleared on plain click,
+    /// drag completion, query change, and panel re-open.
+    @State private var multiSelectIDs: Set<UUID> = []
     @FocusState private var searchFocused: Bool
 
     /// Cached filter result. Recomputed only when `query` or `store.items`
@@ -87,16 +92,78 @@ struct PanelView: View {
         filtered = Self.computeFiltered(items: items, query: query)
         pinnedShortcuts = Self.computePinnedShortcuts(for: items)
         ensureValidSelection()
+        pruneMultiSelect()
     }
 
     private func handleQueryChange() {
         filtered = Self.computeFiltered(items: store.items, query: query)
         ensureValidSelection()
+        // Typing into search is a clear intent shift — drop any partially
+        // built multi-select set rather than carrying it through (the
+        // visible rows may not even include the selected items anymore).
+        multiSelectIDs.removeAll()
     }
 
     private func ensureValidSelection() {
         if selectedID == nil || !filtered.contains(where: { $0.id == selectedID }) {
             selectedID = filtered.first?.id
+        }
+    }
+
+    /// Drops any IDs from `multiSelectIDs` that no longer appear in the
+    /// filtered view (item was evicted, unpinned and dropped off the
+    /// retention edge, etc.).
+    private func pruneMultiSelect() {
+        guard !multiSelectIDs.isEmpty else { return }
+        let visible = Set(filtered.map(\.id))
+        multiSelectIDs.formIntersection(visible)
+    }
+
+    private func toggleMultiSelect(itemID: UUID) {
+        if multiSelectIDs.contains(itemID) {
+            multiSelectIDs.remove(itemID)
+        } else {
+            multiSelectIDs.insert(itemID)
+        }
+    }
+
+    /// Returns the payloads to drag when the user starts a drag from
+    /// `origin`. When `origin` is in the multi-select set, returns
+    /// payloads for every multi-selected item in display order; when it
+    /// isn't, returns just the origin's own payload (and clears any
+    /// existing multi-select set, Finder-style "implicit replace").
+    private func multiSelectPayloads(originatingFrom origin: ClipboardItem) -> [RowDragPayload] {
+        if multiSelectIDs.contains(origin.id) {
+            return filtered
+                .filter { multiSelectIDs.contains($0.id) }
+                .map(dragPayload(for:))
+        }
+        // Drag from a non-selected row — Finder behaviour is "drag this
+        // one, drop the previous selection." We can't mutate state from
+        // within a drag-start closure cleanly, so the explicit clear
+        // happens in `onDragEnded` instead.
+        return [dragPayload(for: origin)]
+    }
+
+    /// Shared payload builder used by both single-item and multi-select
+    /// drags. Lives on the view (not `ItemRow`) so the multi-payload
+    /// closure can reach it without re-plumbing `store` and
+    /// `plainTextOnly` through every helper.
+    private func dragPayload(for item: ClipboardItem) -> RowDragPayload {
+        switch item.content {
+        case .text(let s):
+            return .text(
+                TextPasteTransform.payload(
+                    string: s,
+                    rtfData: item.rtfData,
+                    htmlData: item.htmlData,
+                    plainTextOnly: preferences.pastePlainTextOnly
+                )
+            )
+        case .image(let filename):
+            return .image(store.imageURL(for: filename))
+        case .fileURLs:
+            return .fileURLs(item.resolveAllFileURLs().map(\.url))
         }
     }
 
@@ -121,8 +188,17 @@ struct PanelView: View {
                                     store: store,
                                     shortcutLabel: pinnedShortcuts[item.id],
                                     isSelected: item.id == selectedID,
-                                    plainTextOnly: preferences.pastePlainTextOnly,
-                                    onCopy: onCopy,
+                                    isMultiSelected: multiSelectIDs.contains(item.id),
+                                    onCopy: { item, shiftHeld in
+                                        // Plain click cancels any in-progress
+                                        // multi-select set and fires the
+                                        // normal paste.
+                                        multiSelectIDs.removeAll()
+                                        onCopy(item, shiftHeld)
+                                    },
+                                    onCmdClick: { toggleMultiSelect(itemID: item.id) },
+                                    multiSelectPayloads: { multiSelectPayloads(originatingFrom: item) },
+                                    onDragEnded: { multiSelectIDs.removeAll() },
                                     onCopyPathAsText: onCopyPathAsText,
                                     onLingerHover: { lingeringID in
                                         previewItemID = lingeringID
@@ -178,6 +254,7 @@ struct PanelView: View {
             query = ""
             selectedID = store.items.first?.id
             previewItemID = nil
+            multiSelectIDs.removeAll()
             // Keep search field unfocused so 1–9 paste pinned items directly.
             // Press / to focus the search field.
             searchFocused = false
@@ -552,8 +629,20 @@ private struct ItemRow: View {
     let store: ClipboardStore
     let shortcutLabel: String?
     let isSelected: Bool
-    let plainTextOnly: Bool
+    /// True when the row is in the panel's multi-select set (Cmd-clicked).
+    /// Distinct from `isSelected` (keyboard cursor) — they can both be true.
+    let isMultiSelected: Bool
     let onCopy: (ClipboardItem, Bool) -> Void
+    /// Called when the user Cmd-clicks the row; mutually exclusive with
+    /// `onCopy`. The row never pastes in this case — the panel uses it
+    /// to toggle this row in/out of the multi-select set.
+    let onCmdClick: () -> Void
+    /// Called at drag-start to materialize the payload list. Multi-select
+    /// drags return >1 payloads here; single-row drags return one.
+    let multiSelectPayloads: () -> [RowDragPayload]
+    /// Called when an in-flight drag ends (drop succeeded or cancelled).
+    /// The panel uses this to clear the multi-select set.
+    let onDragEnded: () -> Void
     let onCopyPathAsText: ([URL]) -> Void
     /// Called with the item's id when the cursor has lingered on the row long
     /// enough to show a preview, or nil when the cursor leaves.
@@ -640,9 +729,12 @@ private struct ItemRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .overlay {
-            RowDragSourceView(payload: dragPayload) { shiftHeld in
-                onCopy(item, shiftHeld)
-            }
+            RowDragSourceView(
+                payloads: multiSelectPayloads,
+                onClick: { shiftHeld in onCopy(item, shiftHeld) },
+                onCmdClick: onCmdClick,
+                onDragEnded: onDragEnded
+            )
         }
     }
 
@@ -663,26 +755,9 @@ private struct ItemRow: View {
         .foregroundStyle(.secondary)
     }
 
-    private var dragPayload: RowDragPayload {
-        switch item.content {
-        case .text(let s):
-            return .text(
-                TextPasteTransform.payload(
-                    string: s,
-                    rtfData: item.rtfData,
-                    htmlData: item.htmlData,
-                    plainTextOnly: plainTextOnly
-                )
-            )
-        case .image(let filename):
-            return .image(store.imageURL(for: filename))
-        case .fileURLs:
-            // Use resolved URLs so drag-out follows files that have been
-            // renamed or moved since capture. `RowDragSourceNSView` filters
-            // out non-existent paths internally.
-            return .fileURLs(item.resolveAllFileURLs().map(\.url))
-        }
-    }
+    // `dragPayload` moved up to `PanelView.dragPayload(for:)` so the
+    // multi-select payload closure can reuse it without re-plumbing
+    // `store` + `plainTextOnly` through every helper.
 
     @ViewBuilder
     private var contextMenuItems: some View {
@@ -805,6 +880,12 @@ private struct ItemRow: View {
     }
 
     private var rowBackground: Color {
+        // Multi-select wins over keyboard cursor when both are true — the
+        // user explicitly clicked this row into a set, and the orange
+        // tint matches the pin / shortcut accent already used in the row.
+        if isMultiSelected {
+            return Color.orange.opacity(isSelected ? 0.30 : 0.22)
+        }
         if isSelected { return Color.accentColor.opacity(0.25) }
         if hovering   { return Color.secondary.opacity(0.15) }
         return .clear

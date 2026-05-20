@@ -8,27 +8,44 @@ enum RowDragPayload {
 }
 
 struct RowDragSourceView: NSViewRepresentable {
-    let payload: RowDragPayload
-    let onClick: (Bool) -> Void
+    /// Called at drag-start to materialize the payload set for this drag.
+    /// Returning multiple payloads (multi-select drag) produces one
+    /// `NSDraggingSession` carrying all of them; macOS handles mixed
+    /// pasteboard types natively.
+    let payloads: () -> [RowDragPayload]
+    let onClick: (_ shiftHeld: Bool) -> Void
+    /// Fires when the user Cmd-clicks the row (mutually exclusive with
+    /// `onClick`). The view doesn't paste in this case — the panel uses
+    /// the callback to toggle the row in/out of the multi-select set.
+    let onCmdClick: () -> Void
+    /// Fires when an in-flight drag ends (drop succeeded or cancelled).
+    /// The panel uses this to clear its multi-select set after the drag
+    /// completes.
+    let onDragEnded: () -> Void
 
     func makeNSView(context: Context) -> RowDragSourceNSView {
         let view = RowDragSourceNSView()
-        view.payload = payload
-        view.onClick = onClick
+        apply(to: view)
         return view
     }
 
     func updateNSView(_ nsView: RowDragSourceNSView, context: Context) {
-        nsView.payload = payload
-        nsView.onClick = onClick
+        apply(to: nsView)
+    }
+
+    private func apply(to view: RowDragSourceNSView) {
+        view.payloadsProvider = payloads
+        view.onClick = onClick
+        view.onCmdClick = onCmdClick
+        view.onDragEnded = onDragEnded
     }
 }
 
 final class RowDragSourceNSView: NSView, NSDraggingSource {
-    var payload: RowDragPayload = .text(
-        TextPastePayload(string: "", rtfData: nil, htmlData: nil)
-    )
+    var payloadsProvider: () -> [RowDragPayload] = { [] }
     var onClick: ((Bool) -> Void)?
+    var onCmdClick: (() -> Void)?
+    var onDragEnded: (() -> Void)?
 
     private var mouseDownEvent: NSEvent?
     private var dragStarted = false
@@ -57,7 +74,8 @@ final class RowDragSourceNSView: NSView, NSDraggingSource {
               let mouseDownEvent,
               dragDistance(from: mouseDownEvent, to: event) >= dragThreshold else { return }
 
-        let items = draggingItems(for: payload)
+        let payloads = payloadsProvider()
+        let items = draggingItems(for: payloads)
         guard !items.isEmpty else { return }
 
         dragStarted = true
@@ -70,12 +88,24 @@ final class RowDragSourceNSView: NSView, NSDraggingSource {
             dragStarted = false
         }
         guard !dragStarted else { return }
-        onClick?(event.modifierFlags.contains(.shift))
+        // Cmd takes precedence over Shift: cmd-click is "modify selection"
+        // and never pastes, even when shift is also held.
+        if event.modifierFlags.contains(.command) {
+            onCmdClick?()
+        } else {
+            onClick?(event.modifierFlags.contains(.shift))
+        }
     }
 
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         .copy
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
+        onDragEnded?()
     }
 
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool {
@@ -90,7 +120,35 @@ final class RowDragSourceNSView: NSView, NSDraggingSource {
         return hypot(dx, dy)
     }
 
-    private func draggingItems(for payload: RowDragPayload) -> [NSDraggingItem] {
+    /// Flattens N payloads into a single `[NSDraggingItem]` for one
+    /// dragging session. Drag-preview stacking uses the running index
+    /// across all items so a mixed multi-drag (text + image + files)
+    /// still produces a tidy stacked preview.
+    private func draggingItems(for payloads: [RowDragPayload]) -> [NSDraggingItem] {
+        var nested: [[(NSPasteboardWriting, NSImage)]] = []
+        for payload in payloads {
+            nested.append(writerImagePairs(for: payload))
+        }
+        let total = nested.reduce(0) { $0 + $1.count }
+        guard total > 0 else { return [] }
+        var out: [NSDraggingItem] = []
+        var index = 0
+        for group in nested {
+            for (writer, image) in group {
+                out.append(draggingItem(writer: writer, image: image,
+                                        index: index, count: total))
+                index += 1
+            }
+        }
+        return out
+    }
+
+    /// Returns the `(NSPasteboardWriting, drag-preview NSImage)` pairs
+    /// for one payload. File-URL payloads expand to one pair per file
+    /// (so Finder sees a real multi-file drop); other payloads produce a
+    /// single pair.
+    private func writerImagePairs(for payload: RowDragPayload)
+        -> [(NSPasteboardWriting, NSImage)] {
         switch payload {
         case .text(let payload):
             let pasteboardItem = NSPasteboardItem()
@@ -101,14 +159,7 @@ final class RowDragSourceNSView: NSView, NSDraggingSource {
             if let htmlData = payload.htmlData {
                 pasteboardItem.setData(htmlData, forType: .html)
             }
-            return [
-                draggingItem(
-                    writer: pasteboardItem,
-                    image: dragImage(systemSymbol: "text.alignleft"),
-                    index: 0,
-                    count: 1
-                )
-            ]
+            return [(pasteboardItem, dragImage(systemSymbol: "text.alignleft"))]
 
         case .image(let url):
             let pasteboardItem = NSPasteboardItem()
@@ -123,36 +174,19 @@ final class RowDragSourceNSView: NSView, NSDraggingSource {
                 }
             }
             pasteboardItem.setString(url.absoluteString, forType: .fileURL)
-            return [
-                draggingItem(
-                    writer: pasteboardItem,
-                    image: dragImage(from: &image, fallbackSymbol: "photo"),
-                    index: 0,
-                    count: 1
-                )
-            ]
+            return [(pasteboardItem, dragImage(from: &image, fallbackSymbol: "photo"))]
 
         case .fileURLs(let urls):
             let existingURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
             guard !existingURLs.isEmpty else {
+                // Fallback when none of the files still exist: drop the
+                // paths as text so the user at least gets something.
                 let pasteboardItem = NSPasteboardItem()
                 pasteboardItem.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
-                return [
-                    draggingItem(
-                        writer: pasteboardItem,
-                        image: dragImage(systemSymbol: "doc.on.doc"),
-                        index: 0,
-                        count: 1
-                    )
-                ]
+                return [(pasteboardItem, dragImage(systemSymbol: "doc.on.doc"))]
             }
-            return existingURLs.enumerated().map { index, url in
-                draggingItem(
-                    writer: url as NSURL,
-                    image: dragImage(fileURL: url),
-                    index: index,
-                    count: existingURLs.count
-                )
+            return existingURLs.map { url in
+                (url as NSURL, dragImage(fileURL: url))
             }
         }
     }
