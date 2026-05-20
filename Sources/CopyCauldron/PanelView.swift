@@ -314,7 +314,10 @@ struct PanelView: View {
             guard paths.count > 1 else { return nil }
             return paths.joined(separator: "\n")
         case .image:
-            return nil
+            // Surface the OCR'd text on hover when we have it. Same
+            // 2000-char preview cap as text items.
+            guard let ocr = item.ocrText, !ocr.isEmpty else { return nil }
+            return String(ocr.prefix(2000))
         }
     }
 
@@ -741,6 +744,16 @@ private struct ItemRow: View {
         case .image(let filename):
             Button("Save as…") { saveImageAs(filename) }
             Button("Open in Preview") { openImage(filename) }
+            // Only shown once Vision has populated `ocrText` for this image.
+            // Builds a synthetic text item so the existing paste plumbing
+            // (clipboard write-back + optional auto-paste) handles it
+            // identically to a real text row.
+            if let ocr = item.ocrText, !ocr.isEmpty {
+                Button("Paste OCR text") {
+                    let textItem = ClipboardItem(content: .text(ocr))
+                    onCopy(textItem, false)
+                }
+            }
         case .text(let s):
             if let url = detectURL(in: s) {
                 Button("Open in browser") { NSWorkspace.shared.open(url) }

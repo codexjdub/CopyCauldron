@@ -72,6 +72,14 @@ final class HistoryDatabase {
                 columns: ["source_app_bundle_id"]
             )
         }
+        m.registerMigration("v4_image_ocr_text") { db in
+            // Text recognized from image captures via Vision. Populated
+            // asynchronously after `saveImage`; existing rows remain nil
+            // (no backfill — old screenshots stay unsearchable by content).
+            try db.alter(table: "items") { t in
+                t.add(column: "ocr_text", .text)
+            }
+        }
         return m
     }
 
@@ -211,6 +219,19 @@ final class HistoryDatabase {
         }
     }
 
+    /// Persists the Vision-recognized text for an image row. Called from
+    /// `ClipboardStore.setOCRText(id:text:)` after `OCREngine` finishes its
+    /// background recognition. The `ValueObservation` re-fires on commit
+    /// and the panel reloads the row with `ocrText` populated.
+    func setOCRText(id: UUID, text: String) throws {
+        try dbPool.write { db in
+            try db.execute(
+                sql: "UPDATE items SET ocr_text = ? WHERE id = ?",
+                arguments: [text, id.dataRepresentation]
+            )
+        }
+    }
+
     /// True when the most recent unpinned item has the same content — used by
     /// `ClipboardStore.add` to dedupe consecutive identical copies.
     func mostRecentUnpinnedMatches(_ item: ClipboardItem) throws -> Bool {
@@ -245,6 +266,7 @@ final class HistoryDatabase {
         var htmlData: Data?
         var isPinned: Bool
         var pinnedAt: Date?
+        var ocrText: String?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -260,6 +282,7 @@ final class HistoryDatabase {
             case htmlData               = "html_data"
             case isPinned               = "is_pinned"
             case pinnedAt               = "pinned_at"
+            case ocrText                = "ocr_text"
         }
     }
 
@@ -312,7 +335,8 @@ final class HistoryDatabase {
             rtfData: item.rtfData,
             htmlData: item.htmlData,
             isPinned: item.isPinned,
-            pinnedAt: item.pinnedAt
+            pinnedAt: item.pinnedAt,
+            ocrText: item.ocrText
         )
     }
 
@@ -345,7 +369,8 @@ final class HistoryDatabase {
             rtfData: record.rtfData,
             htmlData: record.htmlData,
             sourceApp: sourceApp(from: record),
-            fileURLBookmarks: bookmarks
+            fileURLBookmarks: bookmarks,
+            ocrText: record.ocrText
         )
     }
 

@@ -209,6 +209,18 @@ final class ClipboardStore: ObservableObject {
         return filename
     }
 
+    /// Writes the OCR-recognized text for an image row. Called by
+    /// `ClipboardMonitor` once `OCREngine` finishes its background pass;
+    /// the `ValueObservation` re-fires on commit and the panel's items
+    /// array reloads with `ocrText` populated (and folded into search).
+    func setOCRText(id: UUID, text: String) {
+        do {
+            try database.setOCRText(id: id, text: text)
+        } catch {
+            NSLog("CopyCauldron: failed to persist OCR text: \(error)")
+        }
+    }
+
     private func cleanup(_ item: ClipboardItem) {
         if case .image(let filename) = item.content {
             let url = imageURL(for: filename)

@@ -98,19 +98,23 @@ final class ClipboardMonitor {
             types.contains(.tiff) || types.contains(.png) {
             if let data = pasteboard.data(forType: .png) {
                 let filename = store.saveImage(data, ext: "png")
-                return ClipboardItem(
+                let item = ClipboardItem(
                     content: .image(filename: filename),
                     sourceApp: sourceApp
                 )
+                scheduleOCR(forImage: filename, itemID: item.id)
+                return item
             }
             if let tiff = pasteboard.data(forType: .tiff),
                let rep = NSBitmapImageRep(data: tiff),
                let png = rep.representation(using: .png, properties: [:]) {
                 let filename = store.saveImage(png, ext: "png")
-                return ClipboardItem(
+                let item = ClipboardItem(
                     content: .image(filename: filename),
                     sourceApp: sourceApp
                 )
+                scheduleOCR(forImage: filename, itemID: item.id)
+                return item
             }
         }
 
@@ -127,6 +131,21 @@ final class ClipboardMonitor {
         }
 
         return nil
+    }
+
+    /// Kicks off Vision text recognition for an image we just persisted.
+    /// Runs on a `userInitiated` background queue inside `OCREngine`; when
+    /// it finishes, we hand the result back to `ClipboardStore` which
+    /// updates the row's `ocr_text` column. The `ValueObservation` re-fires
+    /// on commit and the panel reloads the row with `ocrText` populated.
+    /// Recognition failures (no text in the image, decode errors, etc.)
+    /// silently leave `ocr_text` nil.
+    private func scheduleOCR(forImage filename: String, itemID: UUID) {
+        let url = store.imageURL(for: filename)
+        OCREngine.recognizeText(at: url) { [weak store] text in
+            guard let store, let text else { return }
+            store.setOCRText(id: itemID, text: text)
+        }
     }
 
     private func currentSourceApp() -> SourceAppInfo? {

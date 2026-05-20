@@ -87,6 +87,12 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// existed. Resolution is best-effort: callers fall back to the raw
     /// path when the bookmark fails (file deleted, volume unmounted, etc.).
     let fileURLBookmarks: [Data]?
+    /// Vision-recognized text for image rows, populated asynchronously
+    /// after capture by `OCREngine`. `nil` until recognition completes
+    /// (or always nil for pre-OCR rows). Folded into
+    /// `lowercasedSearchableText` so the regular search filter finds
+    /// screenshots by their on-screen text.
+    let ocrText: String?
 
     init(
         id: UUID = UUID(),
@@ -97,7 +103,8 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         rtfData: Data? = nil,
         htmlData: Data? = nil,
         sourceApp: SourceAppInfo? = nil,
-        fileURLBookmarks: [Data]? = nil
+        fileURLBookmarks: [Data]? = nil,
+        ocrText: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -108,10 +115,12 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.htmlData = htmlData
         self.sourceApp = sourceApp
         self.fileURLBookmarks = fileURLBookmarks
+        self.ocrText = ocrText
         self.textKind = Self.computeKind(from: content)
         self.lowercasedSearchableText = Self.computeSearchableText(
             from: content,
-            sourceApp: sourceApp
+            sourceApp: sourceApp,
+            ocrText: ocrText
         )
         self.displayTitle = Self.computeDisplayTitle(from: content)
     }
@@ -123,7 +132,8 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
 
     private static func computeSearchableText(
         from content: ClipboardContent,
-        sourceApp: SourceAppInfo?
+        sourceApp: SourceAppInfo?,
+        ocrText: String?
     ) -> String {
         var parts: [String]
         switch content {
@@ -139,6 +149,9 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
             if let bundleIdentifier = sourceApp.bundleIdentifier {
                 parts.append(bundleIdentifier)
             }
+        }
+        if let ocrText, !ocrText.isEmpty {
+            parts.append(ocrText)
         }
         return parts.joined(separator: " ").lowercased()
     }
@@ -184,14 +197,16 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.rtfData = try? c.decode(Data.self, forKey: .rtfData)
         self.htmlData = try? c.decode(Data.self, forKey: .htmlData)
         self.sourceApp = try? c.decode(SourceAppInfo.self, forKey: .sourceApp)
-        // `fileURLBookmarks` is intentionally not in CodingKeys — bookmarks
-        // are persisted via SQLite, not the (now-dead) JSON path. Older
-        // decoded items just get nil here.
+        // `fileURLBookmarks` and `ocrText` are intentionally not in
+        // CodingKeys — both are persisted via SQLite, not the (now-dead)
+        // JSON path. Older decoded items just get nil here.
         self.fileURLBookmarks = nil
+        self.ocrText = nil
         self.textKind = Self.computeKind(from: self.content)
         self.lowercasedSearchableText = Self.computeSearchableText(
             from: self.content,
-            sourceApp: self.sourceApp
+            sourceApp: self.sourceApp,
+            ocrText: nil
         )
         self.displayTitle = Self.computeDisplayTitle(from: self.content)
     }
