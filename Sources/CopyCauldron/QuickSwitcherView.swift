@@ -17,14 +17,8 @@ struct QuickSwitcherView: View {
     let onActivate: (ClipboardItem, Bool) -> Void
     let onClose: () -> Void
 
-    @State private var keyMonitor: Any?
     @State private var recentItems: [ClipboardItem] = []
     @State private var selectedID: UUID?
-    /// Captured at first layout; used to scope the local NSEvent monitor
-    /// so it only acts on events for the HUD's own window. Without this
-    /// guard, the main panel's monitor would also fire for HUD events
-    /// (and vice versa), and the first to consume wins.
-    @State private var hostingWindow: NSWindow?
 
     var body: some View {
         VStack(spacing: 2) {
@@ -54,19 +48,13 @@ struct QuickSwitcherView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
         )
-        .background(WindowAccessor { window in
-            if hostingWindow !== window {
-                hostingWindow = window
-            }
-        })
+        .windowScopedKeyMonitor { event in handleKey(event) }
         // SwiftUI's idiomatic Esc handler. Belt-and-suspenders alongside
-        // the local NSEvent monitor below.
+        // the local NSEvent monitor installed by `windowScopedKeyMonitor`.
         .onExitCommand { onClose() }
         .onAppear {
             refreshItems(from: store.items)
-            installKeyMonitor()
         }
-        .onDisappear { removeKeyMonitor() }
         .onReceive(store.$items) { newItems in
             refreshItems(from: newItems)
         }
@@ -86,25 +74,9 @@ struct QuickSwitcherView: View {
         }
     }
 
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // App-wide monitor — also fires for events targeted at the
-            // main panel. Bail unless the event is for the HUD's window.
-            guard let window = hostingWindow, event.window === window else {
-                return event
-            }
-            return handleKey(event) ? nil : event
-        }
-    }
-
-    private func removeKeyMonitor() {
-        if let m = keyMonitor {
-            NSEvent.removeMonitor(m)
-            keyMonitor = nil
-        }
-    }
-
+    /// Returns true when the event has been consumed. Monitor lifecycle,
+    /// window scoping, digit-key mapping, and selection movement are all
+    /// owned by the shared keyboard-navigation helpers.
     private func handleKey(_ event: NSEvent) -> Bool {
         let shiftHeld = event.modifierFlags.contains(.shift)
         switch Int(event.keyCode) {
@@ -112,10 +84,10 @@ struct QuickSwitcherView: View {
             onClose()
             return true
         case kVK_DownArrow:
-            moveSelection(by: 1)
+            selectedID = Selection.adjacentID(in: recentItems, from: selectedID, by: 1)
             return true
         case kVK_UpArrow:
-            moveSelection(by: -1)
+            selectedID = Selection.adjacentID(in: recentItems, from: selectedID, by: -1)
             return true
         case kVK_Return:
             if let id = selectedID,
@@ -126,30 +98,13 @@ struct QuickSwitcherView: View {
         default:
             break
         }
-        // Key off the hardware key code, not `charactersIgnoringModifiers`.
-        // That property special-cases Shift: on a US layout, Shift+1 reports
-        // "!" rather than "1", so `Int(chars)` was returning nil and the
-        // event was being passed through unhandled.
-        if let n = Self.digitKeyCodes[Int(event.keyCode)],
+        if let n = Keyboard.digitIndex(for: event),
            n >= 1, n <= recentItems.count {
             onActivate(recentItems[n - 1], shiftHeld)
             return true
         }
         return false
     }
-
-    private func moveSelection(by delta: Int) {
-        guard !recentItems.isEmpty else { return }
-        let currentIdx = recentItems.firstIndex(where: { $0.id == selectedID }) ?? -1
-        let newIdx = max(0, min(recentItems.count - 1, currentIdx + delta))
-        selectedID = recentItems[newIdx].id
-    }
-
-    private static let digitKeyCodes: [Int: Int] = [
-        kVK_ANSI_1: 1, kVK_ANSI_2: 2, kVK_ANSI_3: 3,
-        kVK_ANSI_4: 4, kVK_ANSI_5: 5, kVK_ANSI_6: 6,
-        kVK_ANSI_7: 7, kVK_ANSI_8: 8, kVK_ANSI_9: 9,
-    ]
 }
 
 private struct QuickSwitcherRow: View {

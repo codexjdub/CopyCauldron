@@ -17,13 +17,7 @@ struct PanelView: View {
 
     @State private var query: String = ""
     @State private var selectedID: UUID?
-    @State private var keyMonitor: Any?
     @State private var previewItemID: UUID?
-    /// Captured at first layout via `WindowAccessor`; used in the local
-    /// NSEvent monitor to ignore key events targeted at *other* windows
-    /// (e.g. the quick-switcher HUD), since local monitors are
-    /// application-wide and would otherwise consume those events here.
-    @State private var hostingWindow: NSWindow?
     @FocusState private var searchFocused: Bool
 
     /// Cached filter result. Recomputed only when `query` or `store.items`
@@ -157,13 +151,7 @@ struct PanelView: View {
                minHeight: Preferences.minPanelSize.height,
                idealHeight: initialSize.height,
                maxHeight: .infinity)
-        .background(WindowAccessor { window in
-            // Only update when it actually changes; SwiftUI calls this on
-            // every layout pass, but the hosting window is stable once set.
-            if hostingWindow !== window {
-                hostingWindow = window
-            }
-        })
+        .windowScopedKeyMonitor { event in handleKey(event) }
         .background(VisualEffectBackground(material: .sidebar))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
@@ -185,9 +173,7 @@ struct PanelView: View {
         }
         .onAppear {
             selectedID = store.items.first?.id
-            installKeyMonitor()
         }
-        .onDisappear { removeKeyMonitor() }
         .onReceive(panelOpened) { _ in
             query = ""
             selectedID = store.items.first?.id
@@ -206,28 +192,9 @@ struct PanelView: View {
 
     // MARK: – Keyboard navigation
 
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // `addLocalMonitorForEvents` is app-wide — this closure also
-            // fires for events targeted at the quick-switcher HUD. Skip
-            // anything not addressed to our own window so the other
-            // monitor gets first crack at its events.
-            guard let window = hostingWindow, event.window === window else {
-                return event
-            }
-            return handleKey(event) ? nil : event
-        }
-    }
-
-    private func removeKeyMonitor() {
-        if let m = keyMonitor {
-            NSEvent.removeMonitor(m)
-            keyMonitor = nil
-        }
-    }
-
-    /// Returns true when the event has been consumed.
+    /// Returns true when the event has been consumed. Monitor lifecycle,
+    /// window scoping, and the digit-keycode map are owned by the shared
+    /// `windowScopedKeyMonitor` modifier + `Keyboard` helper.
     private func handleKey(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let onlyShiftOrNone = mods.subtracting(.shift).isEmpty
@@ -295,10 +262,7 @@ struct PanelView: View {
     }
 
     private func moveSelection(by delta: Int) {
-        guard !filtered.isEmpty else { return }
-        let currentIdx = filtered.firstIndex(where: { $0.id == selectedID }) ?? -1
-        let newIdx = max(0, min(filtered.count - 1, currentIdx + delta))
-        selectedID = filtered[newIdx].id
+        selectedID = Selection.adjacentID(in: filtered, from: selectedID, by: delta)
     }
 
     /// Returns text to show in the hover preview panel, or nil when the item
