@@ -8,6 +8,7 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 ## Features
 
 - **Universal capture** — text, file URLs (copied from Finder), and images (e.g. `⌘⌃⇧4` screenshots). Image files (PNG/JPG/HEIC/etc.) get inline thumbnails.
+- **Image OCR** — captured screenshots run through Vision (`VNRecognizeTextRequest`) in the background; recognized text folds into search so you can find a screenshot by what it says. Hover an image row for a preview of the recognized text; right-click → **Paste OCR text** to paste the text instead of the image.
 - **Smart row icons** — text items are auto-categorized: URL, email, hex color (with a real color swatch), JSON, IP, UUID, Git SHA, Unix/ISO timestamp, base64, currency, hashtag, mention, phone.
 - **Source app context** — new clipboard items remember the best-effort source app, show it in row metadata, and include app names / bundle IDs in search.
 - **Search** — instant filter across the entire history.
@@ -17,12 +18,13 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 - **Pin shortcuts** — press `1`–`9` then `a`–`o`, `q`–`z` while the panel is open to instantly paste pinned items #1–#34. (`p` is reserved for pin/unpin.)
 - **Quick switcher HUD** — second hotkey (default `⌘⌥V`) pops a compact overlay anchored to the text caret of the focused field, showing your most-recent unpinned items. Press `1`–`N` (configurable 2–9) to paste, `↑`/`↓` + `Return` for keyboard nav, `Shift+number` or `Shift+Return` to invert plain-text mode for that paste, `Esc` to dismiss. Falls back to mouse cursor positioning when the focused app doesn't expose a text caret.
 - **Persistent panel, two modes** — the panel stays open until you press `Esc` or click the **X** in its header. Use the **pin** in the header to flip between "floating above other windows" (always on top) and "regular window" (other apps can come forward over it). Move the panel by its top handle, resize it from any edge.
-- **Drag out items** — drag text, images, and files from the panel into other apps.
+- **Drag out items** — drag text, images, and files from the panel into other apps. `Cmd`-click to build a multi-select set, then drag any of the selected rows to drop them all together (mixed text + image + files works natively — the target app picks the type it accepts).
 - **Rich-text aware** — captures RTF and HTML alongside plain text so styled paste round-trips. Toggle plain-text mode in Preferences or hold `Shift` while activating to invert it for one paste.
 - **Auto-paste** — opt-in: the selected item is pasted directly into the target app (requires Accessibility permission). CopyCauldron remembers the most recently activated non-CopyCauldron app and pastes there.
 - **Global hotkeys** — two customizable combos: one for the main panel (default `⌘⇧V`), one for the quick switcher HUD (default `⌘⌥V`).
 - **Auto-open on hover** — opt-in: panel opens when you hover the menu-bar icon.
-- **Right-click actions** — Reveal in Finder, Open, Copy path as text (files); Save as…, Open in Preview (images); Open in browser (URLs).
+- **Capture sound** — opt-in audio feedback when something lands in history (Tink / Pop / Glass / Ping). Off by default.
+- **Right-click actions** — Reveal in Finder, Open, Copy path as text (files); Save as…, Open in Preview, Paste OCR text (images); Open in browser (URLs).
 - **Robust file references** — files copied from Finder are tracked by inode via bookmark data, so Reveal / Open / drag-out follow renames and moves; when the file is genuinely gone, an alert tells you instead of silently doing nothing.
 - **Menu-bar context menu** — right-click the cauldron icon for Preferences or Quit.
 - **Launch at login** — toggle in Preferences.
@@ -81,6 +83,7 @@ To make auto-paste survive rebuilds, sign with a stable self-signed identity by 
 | Pin / unpin selected item | `p` |
 | Paste pinned item #1–#9 | `1`–`9` |
 | Paste pinned item #10–#34 | `a`–`o`, `q`–`z` *(skipping `p`)* |
+| Toggle row into multi-select drag set | `Cmd`-click |
 | Focus search field | `/` |
 | Clear search → unfocus → close panel | `Esc` |
 
@@ -101,11 +104,13 @@ Click the menu-bar icon to open the main panel. Click any item to activate it, o
 
 Open via the gear icon in the panel footer or by right-clicking the menu-bar icon.
 
-- **Global Shortcut** — record the main-panel hotkey.
-- **General** — Launch at login, auto-open on hover, auto-paste on selection, text size.
+- **Permissions** — Accessibility status with a deep-link to System Settings. Required for auto-paste; improves Quick Switcher positioning. Status auto-refreshes while the window is open.
+- **Appearance & Startup** — text size, launch at login.
+- **Main Panel** — record the main-panel hotkey, auto-open on hover.
+- **Quick Switcher** — record the HUD hotkey, choose how many rows it shows (2–9). HUD positioning needs Accessibility (falls back to mouse cursor without it).
+- **Paste** — auto-paste on selection. The toggle is disabled when Accessibility permission is missing — the section header flags the requirement.
+- **Capture** — opt-in capture sound (Tink / Pop / Glass / Ping), plus the excluded-apps list (copied items from those apps never enter history).
 - **History** — total history size (10–500), max pinned items (1–100), auto-expire window.
-- **Quick Switcher** — record the HUD hotkey, and choose how many rows it shows (2–9).
-- **Privacy** — choose source apps whose copied items should never be saved.
 
 The "Plain" chip in the panel footer toggles plain-text-only pasting for text items, stripping rich formatting and compacting runs of extra blank lines; hold `Shift` while activating (or pressing a digit shortcut) to invert it for a single paste.
 
