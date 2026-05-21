@@ -51,6 +51,14 @@ final class ClipboardMonitor {
 
         guard let item = readCurrent() else { return }
         store.add(item)
+        // Audio cue happens after `readCurrent` (which already drops items
+        // from excluded apps) and after the changeCount-suppression check
+        // (which already drops our own write-back), so the sound only
+        // fires for items the user genuinely just copied. Off by default;
+        // see `Preferences.captureSoundEnabled`.
+        if preferences.captureSoundEnabled {
+            preferences.captureSound.play()
+        }
     }
 
     /// Called immediately after CopyCauldron writes an item back to the

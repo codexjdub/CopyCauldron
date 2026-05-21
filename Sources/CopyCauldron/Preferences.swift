@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import AppKit
 
 enum RetentionPeriod: String, CaseIterable, Codable, Identifiable {
     case off
@@ -61,6 +62,27 @@ enum TextSize: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+/// Short feedback sounds suitable for firing on every clipboard capture.
+/// Curated from `/System/Library/Sounds` — long or alert-y system sounds
+/// (Basso, Sosumi, Submarine, Purr) are intentionally excluded so a
+/// rapid copy burst doesn't turn into an annoying loop.
+enum CaptureSound: String, CaseIterable, Codable, Identifiable {
+    case tink = "Tink"
+    case pop = "Pop"
+    case glass = "Glass"
+    case ping = "Ping"
+
+    var id: String { rawValue }
+    var displayName: String { rawValue }
+
+    /// Plays the sound at system alert volume. Safe to call on any
+    /// thread; `NSSound.play()` enqueues onto AppKit's audio thread.
+    /// Returns silently if the named sound isn't available.
+    func play() {
+        NSSound(named: NSSound.Name(rawValue))?.play()
+    }
+}
+
 struct ExcludedAppInfo: Codable, Equatable, Identifiable {
     let bundleIdentifier: String
     var name: String
@@ -105,6 +127,8 @@ final class Preferences: ObservableObject {
     private let textSizeKey = "textSize"
     private let retentionPeriodKey = "retentionPeriod"
     private let excludedAppsKey = "excludedApps"
+    private let captureSoundEnabledKey = "captureSoundEnabled"
+    private let captureSoundKey = "captureSound"
     static let defaultMaxPinnedItems = 20
     static let pinnedItemsRange = 1...100
     static let defaultMaxHistoryItems = 50
@@ -169,6 +193,17 @@ final class Preferences: ObservableObject {
 
     @Published var excludedApps: [ExcludedAppInfo] {
         didSet { saveExcludedApps() }
+    }
+
+    /// When true, `ClipboardMonitor` plays `captureSound` after a new
+    /// item is accepted into history. Off by default — unsolicited
+    /// audio is the kind of thing that gets the app uninstalled.
+    @Published var captureSoundEnabled: Bool {
+        didSet { defaults.set(captureSoundEnabled, forKey: captureSoundEnabledKey) }
+    }
+
+    @Published var captureSound: CaptureSound {
+        didSet { defaults.set(captureSound.rawValue, forKey: captureSoundKey) }
     }
 
     /// Persisted panel size (read at launch, written by drag-to-resize).
@@ -262,6 +297,9 @@ final class Preferences: ObservableObject {
         } else {
             self.excludedApps = []
         }
+        self.captureSoundEnabled = defaults.bool(forKey: captureSoundEnabledKey)
+        let storedSound = defaults.string(forKey: captureSoundKey).flatMap(CaptureSound.init(rawValue:))
+        self.captureSound = storedSound ?? .tink
     }
 
     func addExcludedApp(_ app: ExcludedAppInfo) {

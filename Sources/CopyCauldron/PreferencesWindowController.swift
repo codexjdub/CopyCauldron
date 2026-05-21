@@ -11,7 +11,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         window.title = "CopyCauldron Settings"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 500, height: 860))
+        window.setContentSize(NSSize(width: 500, height: 920))
         window.center()
         super.init(window: window)
         window.delegate = self
