@@ -12,12 +12,25 @@ struct PanelView: View {
     let onPreferences: () -> Void
     let onClose: () -> Void
     let onCopyPathAsText: ([URL]) -> Void
+    /// Notified whenever the resolved hover-preview text changes
+    /// (nil when the user moves off a row or the hovered row has no
+    /// preview content). The second argument is the hovered row's
+    /// frame in `PanelView`'s "panel" coordinate space (top-left
+    /// origin) — used by the sidecar `HoverPreviewController` to
+    /// align the preview window vertically with the row.
+    let onPreviewChange: (String?, CGRect?) -> Void
     let initialSize: CGSize
     let panelOpened: AnyPublisher<Void, Never>
 
     @State private var query: String = ""
     @State private var selectedID: UUID?
     @State private var previewItemID: UUID?
+    /// Frame of the currently-hovered row in this view's "panel"
+    /// coordinate space. Set via `HoveredRowFramePreferenceKey` (each
+    /// row reports its frame only while it's the hovered one).
+    /// Passed up to the sidecar `HoverPreviewController` so it can
+    /// align the preview window with the row, not the panel top.
+    @State private var hoveredRowFrame: CGRect?
     /// Rows the user has Cmd-clicked into a "drag-out together" set.
     /// Separate from `selectedID` (the keyboard cursor); it doesn't drive
     /// paste / Return, only the drag payload. Cleared on plain click,
@@ -43,6 +56,7 @@ struct PanelView: View {
         onPreferences: @escaping () -> Void,
         onClose: @escaping () -> Void,
         onCopyPathAsText: @escaping ([URL]) -> Void,
+        onPreviewChange: @escaping (String?, CGRect?) -> Void,
         initialSize: CGSize,
         panelOpened: AnyPublisher<Void, Never>
     ) {
@@ -52,6 +66,7 @@ struct PanelView: View {
         self.onPreferences = onPreferences
         self.onClose = onClose
         self.onCopyPathAsText = onCopyPathAsText
+        self.onPreviewChange = onPreviewChange
         self.initialSize = initialSize
         self.panelOpened = panelOpened
         // Seed the @State caches from the current store snapshot so the first
@@ -108,6 +123,25 @@ struct PanelView: View {
         pinnedShortcuts = Self.computePinnedShortcuts(for: items)
         ensureValidSelection()
         pruneMultiSelect()
+        // If the previewed item just got evicted, the sidecar should
+        // disappear instead of clinging to stale text.
+        if let id = previewItemID, !items.contains(where: { $0.id == id }) {
+            previewItemID = nil
+        }
+    }
+
+    /// Resolves the current `previewItemID` to its preview text (if
+    /// any) and pushes it + the hovered row's frame up to the sidecar
+    /// `HoverPreviewController`. Either argument `nil` hides the
+    /// sidecar.
+    private func pushPreview() {
+        guard let id = previewItemID,
+              let item = store.items.first(where: { $0.id == id }),
+              let text = previewText(for: item) else {
+            onPreviewChange(nil, nil)
+            return
+        }
+        onPreviewChange(text, hoveredRowFrame)
     }
 
     private func handleQueryChange() {
@@ -261,21 +295,23 @@ struct PanelView: View {
                 .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
                 .allowsHitTesting(false)
         }
-        .overlay(alignment: .bottom) {
-            if let id = previewItemID,
-               let item = store.items.first(where: { $0.id == id }),
-               let previewText = previewText(for: item) {
-                HoverPreviewPanel(text: previewText)
-                    .padding(.horizontal, 10)
-                    // Sit just above the footer.
-                    .padding(.bottom, 44)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-            }
+        // Named coord space the per-row GeometryReaders measure
+        // against. Set on the outermost layout so frames are reported
+        // relative to the main panel's top-left.
+        .coordinateSpace(name: "panel")
+        .onPreferenceChange(HoveredRowFramePreferenceKey.self) { newFrame in
+            hoveredRowFrame = newFrame
+            // Reposition while previewing so the window follows the
+            // user as they hover from one row to the next.
+            if previewItemID != nil { pushPreview() }
         }
         .onAppear {
             selectedID = store.items.first?.id
         }
+        // Drive the sidecar preview window. Fires on hover linger
+        // changes and whenever items refresh (in case the previewed
+        // row was evicted underneath us).
+        .onChange(of: previewItemID) { _ in pushPreview() }
         .onReceive(panelOpened) { _ in
             query = ""
             kindFilter = .all
@@ -597,32 +633,6 @@ private struct VisualEffectBackground: NSViewRepresentable {
     }
 }
 
-private struct HoverPreviewPanel: View {
-    let text: String
-    @Environment(\.textScale) private var textScale: CGFloat
-
-    var body: some View {
-        ScrollView {
-            Text(text)
-                .font(.system(size: 11 * textScale, design: .monospaced))
-                .foregroundStyle(.primary)
-                .textSelection(.disabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-        }
-        .frame(maxHeight: 160)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.97))
-                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
-        )
-    }
-}
-
 private struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> WindowDragHandleNSView {
         WindowDragHandleNSView()
@@ -808,6 +818,19 @@ private struct ItemRow: View {
                 .fill(rowBackground)
         )
         .padding(.horizontal, 6)
+        .background(
+            // Reports the row's frame to `PanelView` only while this
+            // row is the hovered one — the parent's preference reader
+            // uses the value to align the sidecar preview window with
+            // the row instead of the panel top. Frames are in the
+            // "panel" named coordinate space defined on `PanelView`.
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: HoveredRowFramePreferenceKey.self,
+                    value: hovering ? geo.frame(in: .named("panel")) : nil
+                )
+            }
+        )
         .contentShape(Rectangle())
         .onHover { isHovering in
             hovering = isHovering

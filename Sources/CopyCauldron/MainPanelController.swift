@@ -38,6 +38,7 @@ final class MainPanelController: NSObject, NSWindowDelegate {
     private var hotKeySink: AnyCancellable?
     private var keepPanelOpenSink: AnyCancellable?
     private let panelOpenedSubject = PassthroughSubject<Void, Never>()
+    private var hoverPreview: HoverPreviewController!
 
     init(
         store: ClipboardStore,
@@ -57,6 +58,12 @@ final class MainPanelController: NSObject, NSWindowDelegate {
         setUpPanel()
         setUpHotKey()
         setUpKeepPanelOpenSink()
+        // Created after `setUpPanel()` so `panel` exists when the
+        // controller's anchor closure runs. Captures `panel` via a
+        // weak self-style closure so dealloc doesn't leak.
+        hoverPreview = HoverPreviewController { [weak self] in
+            self?.panel
+        }
     }
 
     // MARK: – Public API
@@ -83,6 +90,12 @@ final class MainPanelController: NSObject, NSWindowDelegate {
         if panel.isVisible {
             preferences.panelOrigin = panel.frame.origin
         }
+        // Sidecar must follow the main panel out — otherwise the
+        // preview window lingers on screen with no row to point at.
+        // `forceHide` bypasses the row-leave grace period, which
+        // would otherwise leave the preview on screen briefly after
+        // the main panel is already gone.
+        hoverPreview.forceHide()
         panel.orderOut(nil)
     }
 
@@ -136,6 +149,9 @@ final class MainPanelController: NSObject, NSWindowDelegate {
                 },
                 onCopyPathAsText: { [weak self] urls in
                     self?.onCopyPathAsText(urls)
+                },
+                onPreviewChange: { [weak self] text, anchor in
+                    self?.hoverPreview.update(text: text, anchorInPanel: anchor)
                 },
                 initialSize: initialSize,
                 panelOpened: panelOpenedSubject.eraseToAnyPublisher()
@@ -278,6 +294,8 @@ final class MainPanelController: NSObject, NSWindowDelegate {
               window === panel,
               panel.isVisible else { return }
         preferences.panelOrigin = panel.frame.origin
+        // Keep the sidecar pinned to the moving main panel.
+        hoverPreview.reposition()
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -286,5 +304,8 @@ final class MainPanelController: NSObject, NSWindowDelegate {
               panel.isVisible else { return }
         preferences.panelSize = panel.frame.size
         preferences.panelOrigin = panel.frame.origin
+        // Resizes change the main panel's height → recompute preview
+        // vertical position too.
+        hoverPreview.reposition()
     }
 }
