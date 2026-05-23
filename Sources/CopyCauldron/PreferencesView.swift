@@ -84,7 +84,7 @@ struct PreferencesView: View {
                         : "HUD positioning needs Accessibility"
                 )
             } footer: {
-                Text("A compact HUD pops near your cursor with your most recent unpinned items; press 1–\(preferences.quickSwitcherItemCount) to paste, Shift+number to invert plain-text mode, ⎋ to dismiss.")
+                Text("A compact HUD pops near your cursor with your most recent unpinned items; press the digit or home-row letter (1/a, 2/s, …) to paste, Shift+key to invert plain-text mode, ⎋ to dismiss.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -32,7 +32,8 @@ struct QuickSwitcherView: View {
                 ForEach(Array(recentItems.enumerated()), id: \.element.id) { index, item in
                     QuickSwitcherRow(
                         item: item,
-                        shortcut: "\(index + 1)",
+                        digitLabel: "\(index + 1)",
+                        letterLabel: Keyboard.homeRowLabel(forIndex: index + 1),
                         isSelected: item.id == selectedID,
                         onTap: { shiftHeld in
                             onActivate(item, shiftHeld)
@@ -98,18 +99,22 @@ struct QuickSwitcherView: View {
         default:
             break
         }
-        if let n = Keyboard.digitIndex(for: event),
+        if let n = Keyboard.shortcutIndex(for: event),
            n >= 1, n <= recentItems.count {
             onActivate(recentItems[n - 1], shiftHeld)
             return true
         }
         return false
     }
+
 }
 
 private struct QuickSwitcherRow: View {
     let item: ClipboardItem
-    let shortcut: String
+    let digitLabel: String
+    /// Optional alternate trigger shown as a second, separate pill (e.g.
+    /// the home-row letter). `nil` for items beyond the home-row range.
+    let letterLabel: String?
     let isSelected: Bool
     let onTap: (_ shiftHeld: Bool) -> Void
 
@@ -120,14 +125,17 @@ private struct QuickSwitcherRow: View {
             onTap(NSEvent.modifierFlags.contains(.shift))
         } label: {
             HStack(spacing: 10) {
-                Text(shortcut)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.orange)
-                    .frame(width: 18, height: 18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.orange.opacity(0.5), lineWidth: 1)
-                    )
+                HStack(spacing: 3) {
+                    shortcutPill(digitLabel)
+                    if let letterLabel {
+                        // Muted slash signals "either of these pills works"
+                        // without competing with the orange shortcut tint.
+                        Text("/")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        shortcutPill(letterLabel)
+                    }
+                }
                 Text(item.displayTitle)
                     .font(.system(size: 13))
                     .lineLimit(1)
@@ -144,5 +152,16 @@ private struct QuickSwitcherRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func shortcutPill(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.orange)
+            .frame(width: 18, height: 18)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color.orange.opacity(0.5), lineWidth: 1)
+            )
     }
 }

@@ -23,6 +23,10 @@ struct PanelView: View {
     /// paste / Return, only the drag payload. Cleared on plain click,
     /// drag completion, query change, and panel re-open.
     @State private var multiSelectIDs: Set<UUID> = []
+    /// Narrows the visible list to one content kind. `.all` (the default)
+    /// disables the filter. The chip row that drives this is conditional
+    /// — see the body for the visibility rule.
+    @State private var kindFilter: KindFilter = .all
     @FocusState private var searchFocused: Bool
 
     /// Cached filter result. Recomputed only when `query` or `store.items`
@@ -52,7 +56,9 @@ struct PanelView: View {
         self.panelOpened = panelOpened
         // Seed the @State caches from the current store snapshot so the first
         // render doesn't flash an empty list before the observers fire.
-        _filtered = State(initialValue: Self.computeFiltered(items: store.items, query: ""))
+        _filtered = State(initialValue: Self.computeFiltered(
+            items: store.items, query: "", kindFilter: .all
+        ))
         _pinnedShortcuts = State(initialValue: Self.computePinnedShortcuts(for: store.items))
     }
 
@@ -62,13 +68,22 @@ struct PanelView: View {
         (1...9).map(String.init) + "abcdefghijklmnoqrstuvwxyz".map(String.init)
 
     private static func computeFiltered(
-        items: [ClipboardItem], query: String
+        items: [ClipboardItem], query: String, kindFilter: KindFilter
     ) -> [ClipboardItem] {
-        guard !query.isEmpty else { return items }
+        // Apply the kind filter first — structured-field check is
+        // cheaper than the text-substring scan, so doing it up front
+        // shrinks the input to the text filter.
+        let kindFiltered: [ClipboardItem]
+        if kindFilter == .all {
+            kindFiltered = items
+        } else {
+            kindFiltered = items.filter { kindFilter.matches($0.content) }
+        }
+        guard !query.isEmpty else { return kindFiltered }
         let q = query.lowercased()
         // `lowercasedSearchableText` is precomputed on ClipboardItem at
         // construction time — no per-item allocation here.
-        return items.filter { $0.lowercasedSearchableText.contains(q) }
+        return kindFiltered.filter { $0.lowercasedSearchableText.contains(q) }
     }
 
     private static func computePinnedShortcuts(
@@ -89,18 +104,24 @@ struct PanelView: View {
         // `store.items` — because `@Published` emits in `willSet`, *before*
         // the property is written. Reading `store.items` here would see the
         // previous value and `filtered` would be off by one.
-        filtered = Self.computeFiltered(items: items, query: query)
+        filtered = Self.computeFiltered(items: items, query: query, kindFilter: kindFilter)
         pinnedShortcuts = Self.computePinnedShortcuts(for: items)
         ensureValidSelection()
         pruneMultiSelect()
     }
 
     private func handleQueryChange() {
-        filtered = Self.computeFiltered(items: store.items, query: query)
+        filtered = Self.computeFiltered(items: store.items, query: query, kindFilter: kindFilter)
         ensureValidSelection()
         // Typing into search is a clear intent shift — drop any partially
         // built multi-select set rather than carrying it through (the
         // visible rows may not even include the selected items anymore).
+        multiSelectIDs.removeAll()
+    }
+
+    private func handleKindFilterChange() {
+        filtered = Self.computeFiltered(items: store.items, query: query, kindFilter: kindFilter)
+        ensureValidSelection()
         multiSelectIDs.removeAll()
     }
 
@@ -175,6 +196,11 @@ struct PanelView: View {
             )
             .frame(height: 18)
             header
+            // Chip row only when the user is in "searching mode" — see
+            // `isInSearchMode`. Idle panel keeps its lean vertical layout.
+            if isInSearchMode {
+                KindFilterChips(selection: $kindFilter)
+            }
             Divider()
             if filtered.isEmpty {
                 emptyState
@@ -252,6 +278,7 @@ struct PanelView: View {
         }
         .onReceive(panelOpened) { _ in
             query = ""
+            kindFilter = .all
             selectedID = store.items.first?.id
             previewItemID = nil
             multiSelectIDs.removeAll()
@@ -264,6 +291,7 @@ struct PanelView: View {
         // did.
         .onReceive(store.$items) { newItems in handleItemsChange(items: newItems) }
         .onChange(of: query) { _ in handleQueryChange() }
+        .onChange(of: kindFilter) { _ in handleKindFilterChange() }
         .environment(\.textScale, preferences.textSize.scaleFactor)
     }
 
@@ -370,7 +398,20 @@ struct PanelView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 13 * preferences.textSize.scaleFactor))
                 .focused($searchFocused)
-            if !searchFocused {
+            if isInSearchMode {
+                // One-click exit: clears the query, resets the kind
+                // filter, and unfocuses the field. The 3-way `Esc`
+                // shortcut still works for keyboard users.
+                Button {
+                    exitSearchMode()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+            } else {
                 Text("/")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -385,6 +426,20 @@ struct PanelView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    /// True when the search field is focused, the kind filter is non-
+    /// default, or the text query is non-empty. Drives both the chip
+    /// row visibility and the trailing "clear" button in the search
+    /// field so the two stay in sync.
+    private var isInSearchMode: Bool {
+        searchFocused || kindFilter != .all || !query.isEmpty
+    }
+
+    private func exitSearchMode() {
+        query = ""
+        kindFilter = .all
+        searchFocused = false
     }
 
     private var emptyState: some View {
@@ -453,6 +508,74 @@ struct PanelView: View {
 
 /// Wraps `NSVisualEffectView` for use as a SwiftUI background. Produces the
 /// translucent "frosted glass" look used by Spotlight, Notification Center, etc.
+/// Visible kind buckets for the panel's filter chip row. `.all` (the
+/// default) disables the filter; the other cases narrow to one
+/// `ClipboardContent` case.
+enum KindFilter: CaseIterable, Identifiable {
+    case all, text, image, file
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .all:   return "All"
+        case .text:  return "Text"
+        case .image: return "Images"
+        case .file:  return "Files"
+        }
+    }
+
+    func matches(_ content: ClipboardContent) -> Bool {
+        switch (self, content) {
+        case (.all, _),
+             (.text, .text),
+             (.image, .image),
+             (.file, .fileURLs):
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// Compact chip row that drives `PanelView.kindFilter`. Rendered only
+/// while the user is in "searching mode" (search field focused, query
+/// non-empty, or filter already active) so the idle panel stays lean.
+private struct KindFilterChips: View {
+    @Binding var selection: KindFilter
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(KindFilter.allCases) { kind in
+                chip(for: kind)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func chip(for kind: KindFilter) -> some View {
+        let isSelected = (selection == kind)
+        return Button {
+            selection = kind
+        } label: {
+            Text(kind.label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? Color.white : .primary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isSelected
+                              ? Color.accentColor
+                              : Color.secondary.opacity(0.15))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct VisualEffectBackground: NSViewRepresentable {
     var material: NSVisualEffectView.Material
     var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow

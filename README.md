@@ -11,12 +11,12 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 - **Image OCR** — captured screenshots run through Vision (`VNRecognizeTextRequest`) in the background; recognized text folds into search so you can find a screenshot by what it says. Hover an image row for a preview of the recognized text; right-click → **Paste OCR text** to paste the text instead of the image.
 - **Smart row icons** — text items are auto-categorized: URL, email, hex color (with a real color swatch), JSON, IP, UUID, Git SHA, Unix/ISO timestamp, base64, currency, hashtag, mention, phone.
 - **Source app context** — new clipboard items remember the best-effort source app, show it in row metadata, and include app names / bundle IDs in search.
-- **Search** — instant filter across the entire history.
+- **Search** — instant filter across the entire history. When the search field is active (or a filter is set), a chip row appears with `All` / `Text` / `Images` / `Files` to narrow the list by kind; a `✕` inside the search field clears query + filter + focus in one click.
 - **Hover preview** — linger on a long text item for ~600ms to see a scrollable preview without copying it.
 - **Pinned items** — keep favorites at the top, immune from the history-size cap and the Clear button. Configurable max (default 20, up to 100).
 - **Keyboard-first** — global hotkey opens the panel, then `↑`/`↓` to navigate, `Return` to activate, `p` to pin/unpin, `/` to search, `Esc` to close.
 - **Pin shortcuts** — press `1`–`9` then `a`–`o`, `q`–`z` while the panel is open to instantly paste pinned items #1–#34. (`p` is reserved for pin/unpin.)
-- **Quick switcher HUD** — second hotkey (default `⌘⌥V`) pops a compact overlay anchored to the text caret of the focused field, showing your most-recent unpinned items. Press `1`–`N` (configurable 2–9) to paste, `↑`/`↓` + `Return` for keyboard nav, `Shift+number` or `Shift+Return` to invert plain-text mode for that paste, `Esc` to dismiss. Falls back to mouse cursor positioning when the focused app doesn't expose a text caret.
+- **Quick switcher HUD** — second hotkey (default `⌘⌥V`) pops a compact overlay anchored to the text caret of the focused field, showing your most-recent unpinned items. Press `1`–`N` (configurable 2–9) or the matching home-row letter (`a` / `s` / `d` / `f` / `g` / `h` / `j` / `k` / `l`) to paste — both labels are shown next to each row so neither requires memorization. `↑`/`↓` + `Return` for keyboard nav, `Shift`+key to invert plain-text mode for that paste, `Esc` to dismiss. Falls back to mouse cursor positioning when the focused app doesn't expose a text caret.
 - **Persistent panel, two modes** — the panel stays open until you press `Esc` or click the **X** in its header. Use the **pin** in the header to flip between "floating above other windows" (always on top) and "regular window" (other apps can come forward over it). Move the panel by its top handle, resize it from any edge.
 - **Drag out items** — drag text, images, and files from the panel into other apps. `Cmd`-click to build a multi-select set, then drag any of the selected rows to drop them all together (mixed text + image + files works natively — the target app picks the type it accepts).
 - **Rich-text aware** — captures RTF and HTML alongside plain text so styled paste round-trips. Toggle plain-text mode in Preferences or hold `Shift` while activating to invert it for one paste.
@@ -95,7 +95,7 @@ To make auto-paste survive rebuilds, sign with a stable self-signed identity by 
 | Move selection | `↑` / `↓` |
 | Activate selected item | `Return` |
 | Activate with plain-text mode inverted | `Shift` + `Return` |
-| Paste item #1–#N directly | `1`–`N` (Shift+ inverts plain-text mode) |
+| Paste item #1–#N directly | `1`–`N` *or* the matching home-row letter `a` / `s` / `d` / `f` / `g` / `h` / `j` / `k` / `l` (Shift+ inverts plain-text mode) |
 | Dismiss without pasting | `Esc` or click outside |
 
 Click the menu-bar icon to open the main panel. Click any item to activate it, or drag items into another app. Use the top handle to move the panel; resize from any edge; click the **pin** to flip between floating-on-top and regular-window modes; click the **X** to dismiss. Right-click items for contextual actions.

@@ -97,10 +97,42 @@ enum Keyboard {
         digitKeyCodes[Int(event.keyCode)]
     }
 
+    /// Maps `kVK_ANSI_A`/`S`/`D`/`F`/`G`/`H`/`J`/`K`/`L` to 1–9 in left-
+    /// to-right home-row order. Quick Switcher accepts these alongside
+    /// the digit row so power users don't have to leave home row to pick
+    /// a recent item.
+    static func homeRowIndex(for event: NSEvent) -> Int? {
+        homeRowKeyCodes[Int(event.keyCode)]
+    }
+
+    /// Either a digit (1–9) or a home-row letter (a/s/d/f/g/h/j/k/l) →
+    /// the 1-based position it represents. Used by Quick Switcher so the
+    /// same handler treats both inputs identically.
+    static func shortcutIndex(for event: NSEvent) -> Int? {
+        digitIndex(for: event) ?? homeRowIndex(for: event)
+    }
+
+    /// Home-row letter shown next to the digit in shortcut badges,
+    /// indexed 1–9. Returns `nil` for out-of-range indices.
+    static func homeRowLabel(forIndex index: Int) -> String? {
+        guard index >= 1 && index <= homeRowLetters.count else { return nil }
+        return homeRowLetters[index - 1]
+    }
+
     private static let digitKeyCodes: [Int: Int] = [
         kVK_ANSI_1: 1, kVK_ANSI_2: 2, kVK_ANSI_3: 3,
         kVK_ANSI_4: 4, kVK_ANSI_5: 5, kVK_ANSI_6: 6,
         kVK_ANSI_7: 7, kVK_ANSI_8: 8, kVK_ANSI_9: 9,
+    ]
+
+    private static let homeRowKeyCodes: [Int: Int] = [
+        kVK_ANSI_A: 1, kVK_ANSI_S: 2, kVK_ANSI_D: 3,
+        kVK_ANSI_F: 4, kVK_ANSI_G: 5, kVK_ANSI_H: 6,
+        kVK_ANSI_J: 7, kVK_ANSI_K: 8, kVK_ANSI_L: 9,
+    ]
+
+    private static let homeRowLetters: [String] = [
+        "a", "s", "d", "f", "g", "h", "j", "k", "l",
     ]
 }
 
