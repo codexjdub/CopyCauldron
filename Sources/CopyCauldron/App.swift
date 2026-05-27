@@ -89,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             frontmostAppProvider: { [weak self] in
                 self?.previousFrontmostApp
             },
+            willActivate: { [weak self] in
+                self?.rememberCurrentFrontmost()
+            },
             onActivate: { [weak self] item, invert in
                 self?.performPaste(item, invertPlainText: invert)
             }
@@ -98,6 +101,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             preferences: preferences,
             statusItemButtonProvider: { [weak self] in
                 self?.statusItem.button
+            },
+            willActivate: { [weak self] in
+                self?.rememberCurrentFrontmost()
             },
             onActivate: { [weak self] item, invert in
                 self?.performPaste(item, invertPlainText: invert)
@@ -260,6 +266,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func rememberExternalFrontmostApp(_ app: NSRunningApplication) {
         guard app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
         previousFrontmostApp = app
+    }
+
+    /// Belt-and-suspenders re-sample of the current frontmost app,
+    /// called by both controllers immediately before `NSApp.activate`
+    /// in their show paths. The
+    /// `NSWorkspace.didActivateApplicationNotification` observer
+    /// usually keeps `previousFrontmostApp` current, but its
+    /// `Task { @MainActor in … }` hop can lose a race against a
+    /// hotkey press that immediately follows an app switch. Without
+    /// this re-sample, `previousFrontmostApp` can be nil/stale and
+    /// `performPaste` takes its "no known target" fallback — which
+    /// fires ⌘V into whatever's currently frontmost (CopyCauldron
+    /// itself), making the user's selected item land on the system
+    /// pasteboard but not in the target app.
+    private func rememberCurrentFrontmost() {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
+        rememberExternalFrontmostApp(frontmost)
     }
 
     // MARK: – Preferences window

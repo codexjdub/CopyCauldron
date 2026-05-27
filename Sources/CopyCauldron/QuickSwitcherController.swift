@@ -22,6 +22,13 @@ final class QuickSwitcherController {
     private let store: ClipboardStore
     private let preferences: Preferences
     private let frontmostAppProvider: () -> NSRunningApplication?
+    /// Called immediately before `NSApp.activate` in `show()` so
+    /// `AppDelegate` can sample `NSWorkspace.shared.frontmostApplication`
+    /// and stash it as the paste target. The observer-based tracking
+    /// in `AppDelegate` can race against a hotkey press, leaving
+    /// `previousFrontmostApp` stale; this re-sample restores the
+    /// belt-and-suspenders from the pre-extraction code.
+    private let willActivate: () -> Void
     private let onActivate: (ClipboardItem, Bool) -> Void
 
     private let hotKeyManager = HotKeyManager(id: 2)
@@ -33,11 +40,13 @@ final class QuickSwitcherController {
         store: ClipboardStore,
         preferences: Preferences,
         frontmostAppProvider: @escaping () -> NSRunningApplication?,
+        willActivate: @escaping () -> Void = {},
         onActivate: @escaping (ClipboardItem, Bool) -> Void
     ) {
         self.store = store
         self.preferences = preferences
         self.frontmostAppProvider = frontmostAppProvider
+        self.willActivate = willActivate
         self.onActivate = onActivate
         setUpPanel()
         setUpHotKey()
@@ -127,6 +136,11 @@ final class QuickSwitcherController {
     // MARK: – Show / activate
 
     private func show() {
+        // Sample the current frontmost app BEFORE we activate
+        // CopyCauldron — once we activate, the frontmost becomes us.
+        // See `willActivate` doc for why the observer-only path isn't
+        // enough here.
+        willActivate()
         NSApp.activate(ignoringOtherApps: true)
 
         // Resize before show in case the user changed the row count via

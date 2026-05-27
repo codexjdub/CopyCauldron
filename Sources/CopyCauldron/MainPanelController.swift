@@ -24,6 +24,13 @@ final class MainPanelController: NSObject, NSWindowDelegate {
     private let store: ClipboardStore
     private let preferences: Preferences
     private let statusItemButtonProvider: () -> NSStatusBarButton?
+    /// Called immediately before `NSApp.activate` in `show()` so
+    /// `AppDelegate` can sample `NSWorkspace.shared.frontmostApplication`
+    /// and stash it as the paste target. The observer-based tracking
+    /// in `AppDelegate` can race against a hotkey press, leaving
+    /// `previousFrontmostApp` stale; this re-sample restores the
+    /// belt-and-suspenders from the pre-extraction code.
+    private let willActivate: () -> Void
     private let onActivate: (ClipboardItem, Bool) -> Void
     private let onPreferences: () -> Void
     private let onCopyPathAsText: ([URL]) -> Void
@@ -44,6 +51,7 @@ final class MainPanelController: NSObject, NSWindowDelegate {
         store: ClipboardStore,
         preferences: Preferences,
         statusItemButtonProvider: @escaping () -> NSStatusBarButton?,
+        willActivate: @escaping () -> Void = {},
         onActivate: @escaping (ClipboardItem, Bool) -> Void,
         onPreferences: @escaping () -> Void,
         onCopyPathAsText: @escaping ([URL]) -> Void
@@ -51,6 +59,7 @@ final class MainPanelController: NSObject, NSWindowDelegate {
         self.store = store
         self.preferences = preferences
         self.statusItemButtonProvider = statusItemButtonProvider
+        self.willActivate = willActivate
         self.onActivate = onActivate
         self.onPreferences = onPreferences
         self.onCopyPathAsText = onCopyPathAsText
@@ -215,6 +224,11 @@ final class MainPanelController: NSObject, NSWindowDelegate {
 
     private func show() {
         guard statusItemButtonProvider() != nil else { return }
+        // Sample the current frontmost app BEFORE we activate
+        // CopyCauldron — once we activate, the frontmost becomes us.
+        // See `willActivate` doc for why the observer-only path isn't
+        // enough here.
+        willActivate()
         NSApp.activate(ignoringOtherApps: true)
         panel.setFrame(preferredPanelFrame(), display: true)
         panel.makeKeyAndOrderFront(nil)
