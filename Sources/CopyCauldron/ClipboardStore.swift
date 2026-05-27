@@ -185,6 +185,28 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
+    /// Swaps the `pin_order` of this pinned item with the pinned
+    /// item immediately above it. No-op when the item isn't pinned
+    /// or is already topmost. The DB observation re-emits, the
+    /// panel's `items` array reorders, and the digit/letter
+    /// shortcuts re-assign automatically.
+    func movePinUp(_ item: ClipboardItem) {
+        do {
+            try database.movePinUp(id: item.id)
+        } catch {
+            NSLog("CopyCauldron: failed to move pin up: \(error)")
+        }
+    }
+
+    /// Symmetric to `movePinUp`.
+    func movePinDown(_ item: ClipboardItem) {
+        do {
+            try database.movePinDown(id: item.id)
+        } catch {
+            NSLog("CopyCauldron: failed to move pin down: \(error)")
+        }
+    }
+
     private func evictIfNeeded() {
         do {
             let evicted = try database.evictUnpinnedIfNeeded(

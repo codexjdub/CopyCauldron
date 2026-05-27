@@ -35,6 +35,11 @@ struct PanelView: View {
     /// panel. Drives an accent-tinted border for visual feedback so
     /// the user knows the drop will be accepted.
     @State private var isDragOver: Bool = false
+    /// Formatted on-disk size of the history (SQLite + cached image
+    /// files), shown next to the item count in the footer. Empty
+    /// string until the first compute completes (avoids flashing a
+    /// "0 B" before the async pass returns).
+    @State private var diskUsageLabel: String = ""
     /// Rows the user has Cmd-clicked into a "drag-out together" set.
     /// Separate from `selectedID` (the keyboard cursor); it doesn't drive
     /// paste / Return, only the drag payload. Cleared on plain click,
@@ -52,6 +57,11 @@ struct PanelView: View {
     @State private var filtered: [ClipboardItem] = []
     /// Cached pinned-item shortcut map. Same reasoning.
     @State private var pinnedShortcuts: [UUID: String] = [:]
+    /// The IDs of the first and last pinned items in display order.
+    /// Used by `ItemRow` to disable the up/down reorder buttons at
+    /// the boundaries. Nil when there are no pinned items.
+    @State private var topPinnedID: UUID?
+    @State private var bottomPinnedID: UUID?
 
     init(
         store: ClipboardStore,
@@ -79,6 +89,9 @@ struct PanelView: View {
             items: store.items, query: "", kindFilter: .all
         ))
         _pinnedShortcuts = State(initialValue: Self.computePinnedShortcuts(for: store.items))
+        let bounds = Self.computePinnedBounds(for: store.items)
+        _topPinnedID = State(initialValue: bounds.top)
+        _bottomPinnedID = State(initialValue: bounds.bottom)
     }
 
     /// Keys used as pinned-item shortcuts. "p" is reserved to toggle the
@@ -118,6 +131,21 @@ struct PanelView: View {
         return map
     }
 
+    /// First / last pinned ID in display order — `nil` when no items
+    /// are pinned. Pinned items are guaranteed to be at the front of
+    /// the array by the DB query ordering, so this is a single scan.
+    private static func computePinnedBounds(
+        for items: [ClipboardItem]
+    ) -> (top: UUID?, bottom: UUID?) {
+        var top: UUID? = nil
+        var bottom: UUID? = nil
+        for item in items where item.isPinned {
+            if top == nil { top = item.id }
+            bottom = item.id
+        }
+        return (top, bottom)
+    }
+
     private func handleItemsChange(items: [ClipboardItem]) {
         // `items` comes from the `.onReceive(store.$items)` parameter — not
         // `store.items` — because `@Published` emits in `willSet`, *before*
@@ -125,6 +153,9 @@ struct PanelView: View {
         // previous value and `filtered` would be off by one.
         filtered = Self.computeFiltered(items: items, query: query, kindFilter: kindFilter)
         pinnedShortcuts = Self.computePinnedShortcuts(for: items)
+        let bounds = Self.computePinnedBounds(for: items)
+        topPinnedID = bounds.top
+        bottomPinnedID = bounds.bottom
         ensureValidSelection()
         pruneMultiSelect()
         // If the previewed item just got evicted, the sidecar should
@@ -132,6 +163,91 @@ struct PanelView: View {
         if let id = previewItemID, !items.contains(where: { $0.id == id }) {
             previewItemID = nil
         }
+        // Item set changed → a new image may have been added (capture
+        // or drop) or an old one evicted. Recompute on background.
+        refreshDiskUsage()
+    }
+
+    /// Footer count label. Becomes `"3 of 47 items"` when a search
+    /// or kind filter is narrowing the list; falls back to plain
+    /// `"47 items"` when showing everything. Appends the cached
+    /// disk-usage suffix when it's been computed.
+    private var footerCountLabel: String {
+        let totalCount = store.items.count
+        let visibleCount = filtered.count
+        let countText: String
+        if visibleCount == totalCount {
+            countText = "\(totalCount) item\(totalCount == 1 ? "" : "s")"
+        } else {
+            countText = "\(visibleCount) of \(totalCount) item\(totalCount == 1 ? "" : "s")"
+        }
+        if diskUsageLabel.isEmpty {
+            return countText
+        }
+        return "\(countText) · \(diskUsageLabel)"
+    }
+
+    /// Help-tooltip text. Spells out the breakdown so the user can
+    /// hover for clarity if the compact footer label is ambiguous.
+    private var footerCountTooltip: String {
+        let total = store.items.count
+        if filtered.count == total {
+            return diskUsageLabel.isEmpty
+                ? "\(total) items in history"
+                : "\(total) items in history, \(diskUsageLabel) on disk"
+        }
+        return diskUsageLabel.isEmpty
+            ? "\(filtered.count) of \(total) items match the current filter"
+            : "\(filtered.count) of \(total) items match the current filter (\(diskUsageLabel) on disk total)"
+    }
+
+    /// Recomputes the on-disk footprint in the background and
+    /// updates `diskUsageLabel` on main. Sums the SQLite DB plus the
+    /// `images/` directory under Application Support. Cheap enough
+    /// (<1ms for a hundred files) to run on every items-change
+    /// without debouncing.
+    private func refreshDiskUsage() {
+        Task.detached(priority: .utility) {
+            let bytes = Self.computeDiskUsageBytes()
+            let formatted = ByteCountFormatter.string(
+                fromByteCount: bytes,
+                countStyle: .file
+            )
+            await MainActor.run {
+                diskUsageLabel = formatted
+            }
+        }
+    }
+
+    private static func computeDiskUsageBytes() -> Int64 {
+        let fm = FileManager.default
+        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CopyCauldron", isDirectory: true)
+        let db = support.appendingPathComponent("history.db")
+        let images = support.appendingPathComponent("images", isDirectory: true)
+
+        var total: Int64 = 0
+        // SQLite — single file. WAL/SHM are transient companion files
+        // and we don't bother summing them; the user-visible "on disk"
+        // claim is about the persistent footprint.
+        if let size = (try? fm.attributesOfItem(atPath: db.path))?[.size] as? NSNumber {
+            total += size.int64Value
+        }
+        // images/ directory — sum top-level entries (the layout is
+        // flat, one PNG per item).
+        if let contents = try? fm.contentsOfDirectory(
+            at: images,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for url in contents {
+                let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+                if let size = values?.fileSize {
+                    total += Int64(size)
+                }
+            }
+        }
+        return total
     }
 
     /// Adds dropped content to history. Mirrors the type precedence
@@ -303,6 +419,8 @@ struct PanelView: View {
                                     shortcutLabel: pinnedShortcuts[item.id],
                                     isSelected: item.id == selectedID,
                                     isMultiSelected: multiSelectIDs.contains(item.id),
+                                    isTopPinned: item.id == topPinnedID,
+                                    isBottomPinned: item.id == bottomPinnedID,
                                     onCopy: { item, shiftHeld in
                                         // Plain click cancels any in-progress
                                         // multi-select set and fires the
@@ -313,6 +431,8 @@ struct PanelView: View {
                                     onCmdClick: { toggleMultiSelect(itemID: item.id) },
                                     multiSelectPayloads: { multiSelectPayloads(originatingFrom: item) },
                                     onDragEnded: { multiSelectIDs.removeAll() },
+                                    onMovePinUp: { store.movePinUp(item) },
+                                    onMovePinDown: { store.movePinDown(item) },
                                     onCopyPathAsText: onCopyPathAsText,
                                     onLingerHover: { lingeringID in
                                         previewItemID = lingeringID
@@ -375,6 +495,7 @@ struct PanelView: View {
         }
         .onAppear {
             selectedID = store.items.first?.id
+            refreshDiskUsage()
         }
         // Drive the sidecar preview window. Fires on hover linger
         // changes and whenever items refresh (in case the previewed
@@ -560,9 +681,10 @@ struct PanelView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Text("\(store.items.count) item\(store.items.count == 1 ? "" : "s")")
+            Text(footerCountLabel)
                 .font(.system(size: 11 * preferences.textSize.scaleFactor))
                 .foregroundStyle(.secondary)
+                .help(footerCountTooltip)
             Spacer()
             Button {
                 preferences.pastePlainTextOnly.toggle()
@@ -833,6 +955,11 @@ private struct ItemRow: View {
     /// True when the row is in the panel's multi-select set (Cmd-clicked).
     /// Distinct from `isSelected` (keyboard cursor) — they can both be true.
     let isMultiSelected: Bool
+    /// True when this row is the first / last pinned item in display
+    /// order. The reorder buttons key off these to disable themselves
+    /// at the boundaries.
+    let isTopPinned: Bool
+    let isBottomPinned: Bool
     let onCopy: (ClipboardItem, Bool) -> Void
     /// Called when the user Cmd-clicks the row; mutually exclusive with
     /// `onCopy`. The row never pastes in this case — the panel uses it
@@ -844,6 +971,10 @@ private struct ItemRow: View {
     /// Called when an in-flight drag ends (drop succeeded or cancelled).
     /// The panel uses this to clear the multi-select set.
     let onDragEnded: () -> Void
+    /// Move this pinned item one position up / down in the pinned
+    /// section. Wired to `ClipboardStore.movePinUp / movePinDown`.
+    let onMovePinUp: () -> Void
+    let onMovePinDown: () -> Void
     let onCopyPathAsText: ([URL]) -> Void
     /// Called with the item's id when the cursor has lingered on the row long
     /// enough to show a preview, or nil when the cursor leaves.
@@ -856,6 +987,26 @@ private struct ItemRow: View {
     var body: some View {
         HStack(spacing: 10) {
             dragContent
+            // Reorder buttons appear only for hovered pinned rows. The
+            // buttons stay rendered at the boundaries (just disabled)
+            // so the row's trailing-edge layout doesn't shift as you
+            // hover up/down the pinned section.
+            if item.isPinned && hovering {
+                Button(action: onMovePinUp) {
+                    Image(systemName: "chevron.up")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isTopPinned)
+                .help("Move up")
+                Button(action: onMovePinDown) {
+                    Image(systemName: "chevron.down")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isBottomPinned)
+                .help("Move down")
+            }
             if hovering || item.isPinned {
                 Button {
                     if !store.togglePin(item) {

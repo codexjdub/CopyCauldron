@@ -80,6 +80,27 @@ final class HistoryDatabase {
                 t.add(column: "ocr_text", .text)
             }
         }
+        m.registerMigration("v5_pin_ordering") { db in
+            // Manual display order for pinned items. NULL for unpinned
+            // rows. Existing pinned items are backfilled with row-number
+            // positions assigned by their original `pinned_at` (oldest
+            // pin → 0) so the upgrade preserves whatever order the user
+            // saw before. New pins are assigned MAX(pin_order) + 1 so
+            // they go to the bottom of the pinned section.
+            try db.alter(table: "items") { t in
+                t.add(column: "pin_order", .integer)
+            }
+            try db.execute(sql: """
+                WITH ordered AS (
+                    SELECT id, ROW_NUMBER() OVER (ORDER BY pinned_at ASC) - 1 AS rn
+                    FROM items
+                    WHERE is_pinned = 1
+                )
+                UPDATE items
+                SET pin_order = (SELECT rn FROM ordered WHERE ordered.id = items.id)
+                WHERE is_pinned = 1
+            """)
+        }
         return m
     }
 
@@ -154,14 +175,71 @@ final class HistoryDatabase {
                 if pinnedCount >= maxPinned {
                     return .pinLimitReached
                 }
+                // New pin goes to the bottom of the pinned section so
+                // an existing curated order isn't disturbed.
+                let maxOrder = try Int.fetchOne(db, sql: """
+                    SELECT COALESCE(MAX(pin_order), -1) FROM items WHERE is_pinned = 1
+                """) ?? -1
                 record.isPinned = true
                 record.pinnedAt = Date()
+                record.pinOrder = maxOrder + 1
             } else {
                 record.isPinned = false
                 record.pinnedAt = nil
+                // Clear the order slot when unpinning. If the user
+                // re-pins later they get a new slot at the bottom.
+                record.pinOrder = nil
             }
             try record.update(db)
             return .ok
+        }
+    }
+
+    /// Swaps `pin_order` between this pinned item and the pinned item
+    /// immediately above it. No-op when the item isn't pinned or is
+    /// already at the top of the pinned section.
+    func movePinUp(id: UUID) throws {
+        try swapPinOrder(id: id, direction: .up)
+    }
+
+    /// Symmetric to `movePinUp`. No-op at the bottom of the pinned
+    /// section.
+    func movePinDown(id: UUID) throws {
+        try swapPinOrder(id: id, direction: .down)
+    }
+
+    private enum PinMoveDirection {
+        case up, down
+    }
+
+    private func swapPinOrder(id: UUID, direction: PinMoveDirection) throws {
+        try dbPool.write { db in
+            guard var current = try Record.fetchOne(db, key: id.dataRepresentation),
+                  current.isPinned,
+                  let currentOrder = current.pinOrder else { return }
+            // Find the immediately-adjacent pinned record in the
+            // requested direction.
+            let neighbour: Record?
+            switch direction {
+            case .up:
+                neighbour = try Record
+                    .filter(Column("is_pinned") == true)
+                    .filter(Column("pin_order") < currentOrder)
+                    .order(Column("pin_order").desc)
+                    .fetchOne(db)
+            case .down:
+                neighbour = try Record
+                    .filter(Column("is_pinned") == true)
+                    .filter(Column("pin_order") > currentOrder)
+                    .order(Column("pin_order").asc)
+                    .fetchOne(db)
+            }
+            guard var other = neighbour,
+                  let otherOrder = other.pinOrder else { return }
+            current.pinOrder = otherOrder
+            other.pinOrder = currentOrder
+            try current.update(db)
+            try other.update(db)
         }
     }
 
@@ -266,6 +344,7 @@ final class HistoryDatabase {
         var htmlData: Data?
         var isPinned: Bool
         var pinnedAt: Date?
+        var pinOrder: Int?
         var ocrText: String?
 
         enum CodingKeys: String, CodingKey {
@@ -282,6 +361,7 @@ final class HistoryDatabase {
             case htmlData               = "html_data"
             case isPinned               = "is_pinned"
             case pinnedAt               = "pinned_at"
+            case pinOrder               = "pin_order"
             case ocrText                = "ocr_text"
         }
     }
@@ -336,6 +416,9 @@ final class HistoryDatabase {
             htmlData: item.htmlData,
             isPinned: item.isPinned,
             pinnedAt: item.pinnedAt,
+            // New rows enter unpinned; pin_order stays nil. It gets
+            // assigned when the user pins the item via `togglePin`.
+            pinOrder: nil,
             ocrText: item.ocrText
         )
     }
@@ -385,13 +468,14 @@ final class HistoryDatabase {
         )
     }
 
-    /// The canonical display order: pinned items first (oldest pin → newest
-    /// pin), then unpinned items by recency (newest first). Matches the
-    /// behavior the JSON-backed store had.
+    /// The canonical display order: pinned items first (by manual
+    /// `pin_order`, with `pinned_at` and `timestamp` as tiebreakers
+    /// for any null `pin_order` from older rows), then unpinned items
+    /// by recency (newest first).
     private static func fetchAllOrdered(db: Database) throws -> [ClipboardItem] {
         let pinned = try Record
             .filter(Column("is_pinned") == true)
-            .order(Column("pinned_at").asc, Column("timestamp").asc)
+            .order(Column("pin_order").asc, Column("pinned_at").asc, Column("timestamp").asc)
             .fetchAll(db)
         let unpinned = try Record
             .filter(Column("is_pinned") == false)
