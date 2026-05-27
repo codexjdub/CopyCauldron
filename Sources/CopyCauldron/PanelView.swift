@@ -31,6 +31,10 @@ struct PanelView: View {
     /// Passed up to the sidecar `HoverPreviewController` so it can
     /// align the preview window with the row, not the panel top.
     @State private var hoveredRowFrame: CGRect?
+    /// True while an external drag from another app is over the
+    /// panel. Drives an accent-tinted border for visual feedback so
+    /// the user knows the drop will be accepted.
+    @State private var isDragOver: Bool = false
     /// Rows the user has Cmd-clicked into a "drag-out together" set.
     /// Separate from `selectedID` (the keyboard cursor); it doesn't drive
     /// paste / Return, only the drag payload. Cleared on plain click,
@@ -127,6 +131,56 @@ struct PanelView: View {
         // disappear instead of clinging to stale text.
         if let id = previewItemID, !items.contains(where: { $0.id == id }) {
             previewItemID = nil
+        }
+    }
+
+    /// Adds dropped content to history. Mirrors the type precedence
+    /// in `ClipboardMonitor.readCurrent()` so dropped content gets
+    /// the same treatment as captured content — file URLs become one
+    /// `.fileURLs` row with bookmarks, images get persisted as PNG +
+    /// scheduled for OCR, text becomes a `.text` row. New items
+    /// enter regular history (not auto-pinned) — the user can pin
+    /// with `p` if they want to keep something permanent.
+    private func handleExternalDrop(_ payload: DroppedPayload) {
+        if !payload.fileURLs.isEmpty {
+            let paths = payload.fileURLs.map(\.path)
+            // Per-file bookmarks so renames/moves are tracked, mirroring
+            // the capture-time logic in ClipboardMonitor.
+            let bookmarks: [Data] = payload.fileURLs.map { url in
+                (try? url.bookmarkData(
+                    options: [],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )) ?? Data()
+            }
+            let resolved: [Data]? = bookmarks.allSatisfy(\.isEmpty) ? nil : bookmarks
+            let item = ClipboardItem(
+                content: .fileURLs(paths),
+                fileURLBookmarks: resolved
+            )
+            store.add(item)
+        }
+        for image in payload.images {
+            guard let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]) else {
+                continue
+            }
+            let filename = store.saveImage(png, ext: "png")
+            let item = ClipboardItem(content: .image(filename: filename))
+            store.add(item)
+            // Background OCR pass, same as for captured screenshots.
+            // The drop might be an image with embedded text the user
+            // wants to find later via search.
+            let url = store.imageURL(for: filename)
+            OCREngine.recognizeText(at: url) { [weak store] text in
+                guard let store, let text else { return }
+                store.setOCRText(id: item.id, text: text)
+            }
+        }
+        if let text = payload.text, !text.isEmpty {
+            let item = ClipboardItem(content: .text(text))
+            store.add(item)
         }
     }
 
@@ -289,10 +343,24 @@ struct PanelView: View {
                maxHeight: .infinity)
         .windowScopedKeyMonitor { event in handleKey(event) }
         .background(VisualEffectBackground(material: .sidebar))
+        .background(
+            // Sits behind everything but the visual background. Drops
+            // from external apps land here; internal row drags (with
+            // `RowDragSourceNSView` as the source) are filtered out
+            // inside the NSView. `hitTest` returns nil so the zone
+            // doesn't block clicks on rows.
+            PanelDropZone(
+                isDragOver: { isDragOver = $0 },
+                onDrop: handleExternalDrop
+            )
+        )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
+                .stroke(
+                    isDragOver ? Color.accentColor : Color.secondary.opacity(0.18),
+                    lineWidth: isDragOver ? 2 : 0.5
+                )
                 .allowsHitTesting(false)
         }
         // Named coord space the per-row GeometryReaders measure
@@ -413,7 +481,7 @@ struct PanelView: View {
         case .text(let s):
             let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let lines = trimmed.components(separatedBy: .newlines).count
-            guard trimmed.count > 80 || lines > 1 else { return nil }
+            guard trimmed.count > 30 || lines > 1 else { return nil }
             return String(trimmed.prefix(2000))
         case .fileURLs(let paths):
             guard paths.count > 1 else { return nil }
@@ -926,6 +994,9 @@ private struct ItemRow: View {
             // Path copy still works even when files are missing — the path
             // string is sometimes useful on its own (logs, error reports).
             Button("Copy path as text") { onCopyPathAsText(resolved.map(\.url)) }
+            if !existingURLs.isEmpty {
+                Button("Share…") { presentSharePicker(items: existingURLs.map { $0 as NSURL }) }
+            }
         case .image(let filename):
             Button("Save as…") { saveImageAs(filename) }
             Button("Open in Preview") { openImage(filename) }
@@ -939,11 +1010,35 @@ private struct ItemRow: View {
                     onCopy(textItem, false)
                 }
             }
+            Button("Share…") {
+                let url = store.imageURL(for: filename)
+                if let image = NSImage(contentsOf: url) {
+                    presentSharePicker(items: [image])
+                }
+            }
         case .text(let s):
             if let url = detectURL(in: s) {
                 Button("Open in browser") { NSWorkspace.shared.open(url) }
             }
+            Button("Share…") { presentSharePicker(items: [s as NSString]) }
         }
+    }
+
+    /// Anchors `NSSharingServicePicker` at the cursor location inside
+    /// the current key window. The right-click context menu has
+    /// already closed by the time the action fires, so we use the
+    /// mouse position (where the user was when they picked the menu
+    /// item) as the natural anchor point.
+    private func presentSharePicker(items: [Any]) {
+        guard !items.isEmpty,
+              let window = NSApp.keyWindow,
+              let contentView = window.contentView else { return }
+        let picker = NSSharingServicePicker(items: items)
+        let mouseInScreen = NSEvent.mouseLocation
+        let mouseInWindow = window.convertPoint(fromScreen: mouseInScreen)
+        let mouseInView = contentView.convert(mouseInWindow, from: nil)
+        let rect = NSRect(origin: mouseInView, size: NSSize(width: 1, height: 1))
+        picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
     }
 
     // MARK: – File actions

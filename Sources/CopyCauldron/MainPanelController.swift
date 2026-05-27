@@ -70,9 +70,12 @@ final class MainPanelController: NSObject, NSWindowDelegate {
         // Created after `setUpPanel()` so `panel` exists when the
         // controller's anchor closure runs. Captures `panel` via a
         // weak self-style closure so dealloc doesn't leak.
-        hoverPreview = HoverPreviewController { [weak self] in
-            self?.panel
-        }
+        // `preferences` is passed in so the sidecar can scale its
+        // font + window size with the user's text-size choice.
+        hoverPreview = HoverPreviewController(
+            anchor: { [weak self] in self?.panel },
+            preferences: preferences
+        )
     }
 
     // MARK: – Public API

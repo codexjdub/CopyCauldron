@@ -39,6 +39,7 @@ struct HoveredRowFramePreferenceKey: PreferenceKey {
 @MainActor
 final class HoverPreviewController {
     private let anchor: () -> NSWindow?
+    private let preferences: Preferences
     private var panel: FloatingPanel!
     private var hostingController: NSHostingController<HoverPreviewContent>!
     /// Most recently shown text. Used by `reposition()` to skip work
@@ -62,15 +63,29 @@ final class HoverPreviewController {
     /// laggy when the user moves away with no intent to scroll.
     private static let dismissDelay: TimeInterval = 0.25
 
-    /// Fixed preview width. Tuned to match the main panel's narrower
-    /// dimensions; the height grows with content up to the cap inside
-    /// the view.
-    private static let width: CGFloat = 280
+    /// Base width at `medium` text size. The actual width scales
+    /// with `preferences.textSize.scaleFactor` so XLarge users get a
+    /// proportionally wider window instead of cramped wrapping.
+    private static let baseWidth: CGFloat = 280
     /// Gap between the main panel's edge and the preview panel.
     private static let gap: CGFloat = 8
 
-    init(anchor: @escaping () -> NSWindow?) {
+    /// Multiplier read fresh on each show/reposition so the preview
+    /// stays in sync with the user's Preferences → Appearance & Startup
+    /// text size choice without needing reactive subscriptions
+    /// (the preview is transient — the next hover picks up new values).
+    private var scaleFactor: CGFloat {
+        preferences.textSize.scaleFactor
+    }
+
+    /// Scaled width used by the panel frame.
+    private var width: CGFloat {
+        Self.baseWidth * scaleFactor
+    }
+
+    init(anchor: @escaping () -> NSWindow?, preferences: Preferences) {
         self.anchor = anchor
+        self.preferences = preferences
         setUpPanel()
     }
 
@@ -138,9 +153,13 @@ final class HoverPreviewController {
     }
 
     private func makeContent(text: String) -> HoverPreviewContent {
-        HoverPreviewContent(text: text) { [weak self] isHovering in
-            self?.handlePreviewHover(isHovering: isHovering)
-        }
+        HoverPreviewContent(
+            text: text,
+            textScale: scaleFactor,
+            onHoverChange: { [weak self] isHovering in
+                self?.handlePreviewHover(isHovering: isHovering)
+            }
+        )
     }
 
     /// Re-runs the positioning logic. Called from
@@ -164,7 +183,7 @@ final class HoverPreviewController {
         hostingController.view.layer?.backgroundColor = NSColor.clear.cgColor
 
         panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 100),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 100),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -215,33 +234,35 @@ final class HoverPreviewController {
 
         let rightX = mainFrame.maxX + Self.gap
         // Right side fits → use it.
-        if rightX + Self.width <= visible.maxX {
-            return NSRect(x: rightX, y: y, width: Self.width, height: height)
+        if rightX + width <= visible.maxX {
+            return NSRect(x: rightX, y: y, width: width, height: height)
         }
         // Else try the left.
-        let leftX = mainFrame.minX - Self.gap - Self.width
+        let leftX = mainFrame.minX - Self.gap - width
         if leftX >= visible.minX {
-            return NSRect(x: leftX, y: y, width: Self.width, height: height)
+            return NSRect(x: leftX, y: y, width: width, height: height)
         }
         // Neither side fits — pin to the right edge of the screen and
         // accept overlap; rare on real-world screen layouts.
         return NSRect(
-            x: max(visible.minX, visible.maxX - Self.width),
+            x: max(visible.minX, visible.maxX - width),
             y: y,
-            width: Self.width,
+            width: width,
             height: height
         )
     }
 
     /// Asks SwiftUI for the preview's intrinsic content height at the
-    /// fixed width, capped so a huge text block doesn't grow the
-    /// panel taller than the main panel. The cap matches the old
-    /// in-panel preview's max — see `HoverPreviewContent`.
+    /// (scaled) width, capped so a huge text block doesn't grow the
+    /// panel beyond the (scaled) max. Both cap and width scale with
+    /// the user's text-size preference so XLarge users get a
+    /// proportionally taller window.
     private func fittingHeight() -> CGFloat {
+        let cap = HoverPreviewContent.baseMaxHeight * scaleFactor
         let fitting = hostingController.sizeThatFits(
-            in: NSSize(width: Self.width, height: HoverPreviewContent.maxHeight)
+            in: NSSize(width: width, height: cap)
         )
-        return max(40, min(HoverPreviewContent.maxHeight, fitting.height))
+        return max(40, min(cap, fitting.height))
     }
 }
 
@@ -256,22 +277,32 @@ final class HoverPreviewController {
 /// when it's left we hide immediately.
 struct HoverPreviewContent: View {
     let text: String
+    /// Multiplier from `Preferences.textSize.scaleFactor`. Applied to
+    /// both the body font and the inner ScrollView max height so an
+    /// XLarge user gets a proportionally larger reading area, not the
+    /// same little box with bigger text.
+    let textScale: CGFloat
     let onHoverChange: (Bool) -> Void
 
-    /// Cap on the rendered preview height. Beyond this, the inner
-    /// ScrollView handles overflow. Matches the old in-panel cap.
-    static let maxHeight: CGFloat = 160
+    /// Base font size at `medium`. The preview is for *reading
+    /// content* (long text, code, OCR'd screenshot text) so it uses
+    /// the same 13pt baseline the row title uses — not 11pt caption
+    /// size.
+    static let baseFont: CGFloat = 13
+    /// Base cap on the rendered preview height at `medium`. Beyond
+    /// this the inner ScrollView handles overflow.
+    static let baseMaxHeight: CGFloat = 160
 
     var body: some View {
         ScrollView {
             Text(text)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: Self.baseFont * textScale, design: .monospaced))
                 .foregroundStyle(.primary)
                 .textSelection(.disabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
         }
-        .frame(maxHeight: Self.maxHeight)
+        .frame(maxHeight: Self.baseMaxHeight * textScale)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.97))
