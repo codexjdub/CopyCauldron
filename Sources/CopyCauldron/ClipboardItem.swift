@@ -1,41 +1,17 @@
 import Foundation
 import AppKit
 
-enum ClipboardContent: Codable, Equatable {
+// Not `Codable`: persistence is GRDB-only (the `Record` type maps content
+// to separate `content_kind` / `text_content` / … columns via a manual
+// switch, never through this enum). The custom coders here were dead after
+// `ClipboardItem` dropped its own `Codable`.
+enum ClipboardContent: Equatable {
     case text(String)
     case image(filename: String)
     case fileURLs([String])
-
-    private enum CodingKeys: String, CodingKey { case kind, value }
-    private enum Kind: String, Codable { case text, image, fileURLs }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .text(let s):
-            try c.encode(Kind.text, forKey: .kind)
-            try c.encode(s, forKey: .value)
-        case .image(let filename):
-            try c.encode(Kind.image, forKey: .kind)
-            try c.encode(filename, forKey: .value)
-        case .fileURLs(let paths):
-            try c.encode(Kind.fileURLs, forKey: .kind)
-            try c.encode(paths, forKey: .value)
-        }
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try c.decode(Kind.self, forKey: .kind)
-        switch kind {
-        case .text:     self = .text(try c.decode(String.self, forKey: .value))
-        case .image:    self = .image(filename: try c.decode(String.self, forKey: .value))
-        case .fileURLs: self = .fileURLs(try c.decode([String].self, forKey: .value))
-        }
-    }
 }
 
-struct SourceAppInfo: Codable, Equatable {
+struct SourceAppInfo: Equatable {
     let bundleIdentifier: String?
     let name: String
 
