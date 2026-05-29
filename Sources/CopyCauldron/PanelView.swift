@@ -219,7 +219,11 @@ struct PanelView: View {
         }
     }
 
-    private static func computeDiskUsageBytes() -> Int64 {
+    // `nonisolated` because it's called from a detached task and touches
+    // only `FileManager` + local state (no main-actor-isolated members).
+    // Without this it inherits `PanelView`'s inferred `@MainActor`
+    // isolation, which warns today and is an error in Swift 6.
+    private nonisolated static func computeDiskUsageBytes() -> Int64 {
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CopyCauldron", isDirectory: true)
@@ -421,6 +425,7 @@ struct PanelView: View {
                                     isMultiSelected: multiSelectIDs.contains(item.id),
                                     isTopPinned: item.id == topPinnedID,
                                     isBottomPinned: item.id == bottomPinnedID,
+                                    canReorder: !isFiltering,
                                     onCopy: { item, shiftHeld in
                                         // Plain click cancels any in-progress
                                         // multi-select set and fires the
@@ -659,6 +664,18 @@ struct PanelView: View {
     /// field so the two stay in sync.
     private var isInSearchMode: Bool {
         searchFocused || kindFilter != .all || !query.isEmpty
+    }
+
+    /// True when the visible list is actually narrowed (query text or a
+    /// kind filter) — distinct from `isInSearchMode`, which also counts
+    /// a focused-but-empty search field. Pin reorder is suppressed
+    /// while filtering: `filtered` no longer shows the full, contiguous
+    /// pinned section, so `topPinnedID` / `bottomPinnedID` (computed
+    /// from the *full* list) wouldn't match the visible rows, and an
+    /// up/down swap could target a hidden neighbour — looking like a
+    /// no-op to the user.
+    private var isFiltering: Bool {
+        kindFilter != .all || !query.isEmpty
     }
 
     private func exitSearchMode() {
@@ -960,6 +977,10 @@ private struct ItemRow: View {
     /// at the boundaries.
     let isTopPinned: Bool
     let isBottomPinned: Bool
+    /// False while a search query or kind filter is active — the
+    /// visible list isn't the full contiguous pinned section then, so
+    /// reorder is suppressed to avoid swaps that target hidden rows.
+    let canReorder: Bool
     let onCopy: (ClipboardItem, Bool) -> Void
     /// Called when the user Cmd-clicks the row; mutually exclusive with
     /// `onCopy`. The row never pastes in this case — the panel uses it
@@ -987,11 +1008,13 @@ private struct ItemRow: View {
     var body: some View {
         HStack(spacing: 10) {
             dragContent
-            // Reorder buttons appear only for hovered pinned rows. The
-            // buttons stay rendered at the boundaries (just disabled)
-            // so the row's trailing-edge layout doesn't shift as you
-            // hover up/down the pinned section.
-            if item.isPinned && hovering {
+            // Reorder buttons appear only for hovered pinned rows, and
+            // only when the full pinned section is visible (not while a
+            // filter is active — see `canReorder`). The buttons stay
+            // rendered at the boundaries (just disabled) so the row's
+            // trailing-edge layout doesn't shift as you hover up/down
+            // the pinned section.
+            if item.isPinned && hovering && canReorder {
                 Button(action: onMovePinUp) {
                     Image(systemName: "chevron.up")
                         .foregroundStyle(.secondary)

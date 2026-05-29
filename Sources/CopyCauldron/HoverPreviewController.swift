@@ -99,8 +99,18 @@ final class HoverPreviewController {
     /// align the preview vertically with the row instead of always
     /// sticking to the top of the main panel.
     func update(text: String?, anchorInPanel: CGRect?) {
-        guard let text, !text.isEmpty, let anchor = anchorInPanel else {
+        guard let text, !text.isEmpty, let anchorRect = anchorInPanel else {
             schedulePendingHide()
+            return
+        }
+        // A row's 600ms hover-linger timer (in `ItemRow`) can fire
+        // *after* the main panel has closed — AppKit doesn't reliably
+        // deliver a hover-exit when a window orders out from under the
+        // cursor, so the timer isn't cancelled. Never order a preview
+        // front with no visible panel beside it; that would leave an
+        // orphaned popup floating on screen.
+        guard anchor()?.isVisible == true else {
+            forceHide()
             return
         }
         // A real preview update arrived — cancel any pending hide
@@ -108,7 +118,7 @@ final class HoverPreviewController {
         pendingHide?.cancel()
         pendingHide = nil
         currentText = text
-        currentAnchorInPanel = anchor
+        currentAnchorInPanel = anchorRect
         hostingController.rootView = makeContent(text: text)
         reposition()
         if !panel.isVisible {

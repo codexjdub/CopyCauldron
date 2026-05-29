@@ -30,12 +30,26 @@ enum TextKind: Equatable {
     private static let iso8601Formatter = ISO8601DateFormatter()
 
     static func detect(in text: String) -> TextKind {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Classification is cosmetic (it only picks the row icon), so bound
+        // the scan: `detect` runs on the main thread at capture time, and
+        // the O(n) traversals + `NSDataDetector` below would stall the
+        // capture of a multi-MB paste. Every pattern we recognize is short
+        // or anchored at the start, so a prefix is enough. `prefix` walks at
+        // most 2048 Characters — O(2048), not O(n) — so this is cheap even
+        // for a 30MB string.
+        let bounded = String(text.prefix(2048))
+        let trimmed = bounded.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .plain }
 
         // Order matters: most specific patterns first.
 
-        if let color = NSColor(hexString: trimmed) { return .hexColor(color) }
+        // Require a `#` prefix or at least one digit before treating a short
+        // hex-ish string as a color. Otherwise common all-hex-letter words
+        // (`ace`, `bad`, `decade`, `facade`) get a spurious color swatch.
+        if trimmed.hasPrefix("#") || trimmed.contains(where: \.isNumber),
+           let color = NSColor(hexString: trimmed) {
+            return .hexColor(color)
+        }
         if isUUID(trimmed)        { return .uuid }
         if isGitSHA(trimmed)      { return .gitSHA }
         if isIPAddress(trimmed)   { return .ipAddress }
@@ -81,10 +95,14 @@ enum TextKind: Equatable {
         UUID(uuidString: s) != nil
     }
 
-    /// Exactly 40 hex chars — a full Git commit SHA. (Short SHAs overlap too
-    /// much with random hex to be reliable.)
+    /// Exactly 40 hex chars with at least one `a–f` letter — a full Git
+    /// commit SHA. (Short SHAs overlap too much with random hex to be
+    /// reliable; requiring a hex *letter* avoids tagging a 40-digit number
+    /// as a SHA.)
     private static func isGitSHA(_ s: String) -> Bool {
-        s.count == 40 && s.allSatisfy(\.isHexDigit)
+        s.count == 40
+            && s.allSatisfy(\.isHexDigit)
+            && s.contains { $0.isLetter }
     }
 
     private static func isIPAddress(_ s: String) -> Bool {

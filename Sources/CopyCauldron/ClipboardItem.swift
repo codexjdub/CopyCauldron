@@ -45,7 +45,7 @@ struct SourceAppInfo: Codable, Equatable {
     }
 }
 
-struct ClipboardItem: Identifiable, Codable, Equatable {
+struct ClipboardItem: Identifiable, Equatable {
     let id: UUID
     let timestamp: Date
     let content: ClipboardContent
@@ -176,55 +176,10 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         }
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case id, timestamp, content, isPinned, pinnedAt, rtfData, htmlData, sourceApp
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try c.decode(UUID.self, forKey: .id)
-        self.timestamp = try c.decode(Date.self, forKey: .timestamp)
-        self.content = try c.decode(ClipboardContent.self, forKey: .content)
-        self.isPinned = (try? c.decode(Bool.self, forKey: .isPinned)) ?? false
-        let storedPinnedAt = try? c.decode(Date.self, forKey: .pinnedAt)
-        // Backfill: pre-existing pinned items use their own timestamp as the
-        // pin time so their order is stable across the upgrade.
-        if self.isPinned {
-            self.pinnedAt = storedPinnedAt ?? self.timestamp
-        } else {
-            self.pinnedAt = nil
-        }
-        self.rtfData = try? c.decode(Data.self, forKey: .rtfData)
-        self.htmlData = try? c.decode(Data.self, forKey: .htmlData)
-        self.sourceApp = try? c.decode(SourceAppInfo.self, forKey: .sourceApp)
-        // `fileURLBookmarks` and `ocrText` are intentionally not in
-        // CodingKeys — both are persisted via SQLite, not the (now-dead)
-        // JSON path. Older decoded items just get nil here.
-        self.fileURLBookmarks = nil
-        self.ocrText = nil
-        self.textKind = Self.computeKind(from: self.content)
-        self.lowercasedSearchableText = Self.computeSearchableText(
-            from: self.content,
-            sourceApp: self.sourceApp,
-            ocrText: nil
-        )
-        self.displayTitle = Self.computeDisplayTitle(from: self.content)
-    }
-
-    // Explicit encode: `textKind` is derived from `content`, so we don't write
-    // it (and the Codable synthesizer can't auto-generate this anyway with the
-    // extra non-Codable property in the mix).
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(id, forKey: .id)
-        try c.encode(timestamp, forKey: .timestamp)
-        try c.encode(content, forKey: .content)
-        try c.encode(isPinned, forKey: .isPinned)
-        try c.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
-        try c.encodeIfPresent(rtfData, forKey: .rtfData)
-        try c.encodeIfPresent(htmlData, forKey: .htmlData)
-        try c.encodeIfPresent(sourceApp, forKey: .sourceApp)
-    }
+    // No `Codable` conformance: persistence goes through GRDB's separate
+    // `Record` type in `HistoryDatabase` (`toRecord` / `fromRecord`), not
+    // JSON. The old JSON-backed store was removed in v0.3.0; the custom
+    // `Codable` coders that survived it were dead code.
 
     var iconSystemName: String {
         switch content {

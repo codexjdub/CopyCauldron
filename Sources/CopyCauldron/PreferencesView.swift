@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 struct PreferencesView: View {
     @ObservedObject var preferences: Preferences
@@ -7,8 +8,14 @@ struct PreferencesView: View {
     /// so the banner disappears shortly after the user grants permission
     /// in System Settings — no need to relaunch the Preferences window.
     @State private var isAccessibilityTrusted: Bool = Paster.isTrusted()
-    /// Fires every 2s; cheap (single `AXIsProcessTrusted` syscall).
-    private let trustTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    /// 2s `AXIsProcessTrusted` poll. Connectable (not `.autoconnect()`)
+    /// so we can stop it on `.onDisappear`: the Preferences window is
+    /// retained for the app's lifetime by its window controller, so an
+    /// autoconnected timer would keep firing forever after the window
+    /// closes. `.onAppear` re-connects it (and does a one-shot refresh,
+    /// so status is always current on open even if reconnect no-ops).
+    private let trustTimer = Timer.publish(every: 2, on: .main, in: .common)
+    @State private var trustTimerConnection: Cancellable?
 
     var body: some View {
         Form {
@@ -164,7 +171,14 @@ struct PreferencesView: View {
         }
         .formStyle(.grouped)
         .frame(width: 500, height: 920)
-        .onAppear { refreshTrustStatus() }
+        .onAppear {
+            refreshTrustStatus()
+            trustTimerConnection = trustTimer.connect()
+        }
+        .onDisappear {
+            trustTimerConnection?.cancel()
+            trustTimerConnection = nil
+        }
         .onReceive(trustTimer) { _ in refreshTrustStatus() }
     }
 
