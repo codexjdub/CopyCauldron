@@ -5,6 +5,13 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 <!-- TODO: add a screenshot of the popover here -->
 <!-- ![CopyCauldron screenshot](docs/screenshot.png) -->
 
+## What's new in 0.7.1
+
+- Concealed pasteboard items are always skipped; excluded-app filtering is documented as best-effort because macOS does not identify the source of a clipboard change.
+- Missing image/file payloads no longer clear the pasteboard or trigger auto-paste, and reopening a visible panel now refreshes the target app first.
+- Global-shortcut changes are transactional: failed registrations restore the previous shortcut, and duplicate saved shortcuts heal on launch.
+- Review fixes prevent orphaned hover previews, hide pin-reorder controls while filtering, stop the Accessibility timer when Preferences closes, and bound text classification work for very large captures.
+
 ## Features
 
 - **Universal capture** — text, file URLs (copied from Finder), and images (e.g. `⌘⌃⇧4` screenshots). Image files (PNG/JPG/HEIC/etc.) get inline thumbnails.
