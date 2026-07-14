@@ -134,7 +134,7 @@ struct PreferencesView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Capture sound is off by default and plays whenever a new item enters history.")
-                    Text("Excluded apps: CopyCauldron skips every copied item whose source app is on this list. Browser extensions appear as their host browser.")
+                    Text("Concealed items are always skipped. App exclusions are best-effort because switching apps before capture can change source attribution; browser extensions appear as their host browser.")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -162,7 +162,7 @@ struct PreferencesView: View {
                 Text("History")
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Pinned items are exempt from the history limit, the Clear button, and auto-expire.")
+                    Text("Pinned items count toward history size but are never evicted to enforce it, removed by Clear, or auto-expired.")
                     Text("Auto-expire sweeps unpinned items past the chosen age at launch and every 60 minutes thereafter.")
                 }
                 .font(.caption)

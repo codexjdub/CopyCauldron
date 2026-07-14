@@ -15,6 +15,7 @@ import Carbon.HIToolbox
 final class HotKeyManager {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
+    private(set) var currentHotKey: HotKey?
     /// 'CPYH' by default; callers can pass a different signature if they want
     /// fully separate handlers. The (signature, id) pair must be unique
     /// across instances or the C callback's filter won't distinguish them.
@@ -33,8 +34,31 @@ final class HotKeyManager {
         if let k = hotKeyRef    { UnregisterEventHotKey(k) }
     }
 
-    func register(_ hotKey: HotKey) {
+    /// Registers a replacement without sacrificing the working shortcut on
+    /// failure. Carbon rejects duplicate combinations within one process; if
+    /// that or another error occurs, the previous registration is restored.
+    @discardableResult
+    func register(_ hotKey: HotKey) -> Bool {
+        if hotKeyRef != nil, currentHotKey == hotKey {
+            return true
+        }
+        let previousHotKey = currentHotKey
         unregister()
+        let status = installRegistration(hotKey)
+        guard status == noErr else {
+            NSLog("CopyCauldron: RegisterEventHotKey failed (status=\(status))")
+            if let previousHotKey {
+                let restoreStatus = installRegistration(previousHotKey)
+                if restoreStatus != noErr {
+                    NSLog("CopyCauldron: failed to restore previous hotkey (status=\(restoreStatus))")
+                }
+            }
+            return false
+        }
+        return true
+    }
+
+    private func installRegistration(_ hotKey: HotKey) -> OSStatus {
         let hotKeyID = EventHotKeyID(signature: signature, id: id)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
@@ -47,9 +71,9 @@ final class HotKeyManager {
         )
         if status == noErr {
             hotKeyRef = ref
-        } else {
-            NSLog("CopyCauldron: RegisterEventHotKey failed (status=\(status))")
+            currentHotKey = hotKey
         }
+        return status
     }
 
     func unregister() {
@@ -57,6 +81,7 @@ final class HotKeyManager {
             UnregisterEventHotKey(k)
             hotKeyRef = nil
         }
+        currentHotKey = nil
     }
 
     private func installHandler() {
@@ -106,4 +131,18 @@ final class HotKeyManager {
             &eventHandler
         )
     }
+}
+
+@MainActor
+func presentHotKeyRegistrationFailure(attempted: HotKey, restored: HotKey?) {
+    let alert = NSAlert()
+    alert.messageText = "Shortcut Unavailable"
+    if let restored {
+        alert.informativeText = "CopyCauldron couldn't register \(attempted.display). It may already be assigned to the other CopyCauldron action. Your previous shortcut, \(restored.display), remains active."
+    } else {
+        alert.informativeText = "CopyCauldron couldn't register \(attempted.display). Choose a different key combination."
+    }
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
 }

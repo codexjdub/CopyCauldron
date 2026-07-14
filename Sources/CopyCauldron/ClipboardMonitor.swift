@@ -20,6 +20,15 @@ final class ClipboardMonitor {
     /// it takes a user to actually open the panel.
     private static let pollInterval: TimeInterval = 1.0
 
+    /// Standard pasteboard marker used by password managers and other apps to
+    /// say that an item must not be retained in clipboard history. Source-app
+    /// exclusions are necessarily best-effort because the frontmost app can
+    /// change before our next poll; this marker travels with the pasteboard
+    /// payload itself, so it is the reliable privacy boundary when present.
+    private static let concealedType = NSPasteboard.PasteboardType(
+        "org.nspasteboard.ConcealedType"
+    )
+
     init(store: ClipboardStore, preferences: Preferences) {
         self.store = store
         self.preferences = preferences
@@ -69,6 +78,12 @@ final class ClipboardMonitor {
     }
 
     private func readCurrent() -> ClipboardItem? {
+        // Honor the source's explicit privacy marker before attempting source-
+        // app attribution. Concealed items never enter history or touch disk.
+        if pasteboard.types?.contains(Self.concealedType) == true {
+            return nil
+        }
+
         let sourceApp = currentSourceApp()
         if preferences.isExcluded(bundleIdentifier: sourceApp?.bundleIdentifier) {
             return nil

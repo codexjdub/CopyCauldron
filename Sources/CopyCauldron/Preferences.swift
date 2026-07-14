@@ -300,6 +300,17 @@ final class Preferences: ObservableObject {
         self.captureSoundEnabled = defaults.bool(forKey: captureSoundEnabledKey)
         let storedSound = defaults.string(forKey: captureSoundKey).flatMap(CaptureSound.init(rawValue:))
         self.captureSound = storedSound ?? .tink
+
+        // Heal duplicate shortcuts persisted by older builds. Carbon permits
+        // only one registration per key/modifier combination in a process;
+        // preserve the primary panel shortcut and reset the Quick Switcher to
+        // whichever built-in default does not conflict with it.
+        if quickSwitcherHotKey == hotKey {
+            quickSwitcherHotKey = hotKey == .defaultQuickSwitcherHotKey
+                ? .defaultHotKey
+                : .defaultQuickSwitcherHotKey
+            saveQuickSwitcherHotKey()
+        }
     }
 
     func addExcludedApp(_ app: ExcludedAppInfo) {

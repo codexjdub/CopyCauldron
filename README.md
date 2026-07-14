@@ -13,7 +13,7 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 - **Source app context** — new clipboard items remember the best-effort source app, show it in row metadata, and include app names / bundle IDs in search.
 - **Search** — instant filter across the entire history. When the search field is active (or a filter is set), a chip row appears with `All` / `Text` / `Images` / `Files` to narrow the list by kind; a `✕` inside the search field clears query + filter + focus in one click.
 - **Hover preview** — linger on a row for ~600ms to see a side panel with more content (long text, multi-file lists, OCR'd image text). The preview anchors next to the hovered row and stays visible while your cursor is over it, so you can scroll inside without it disappearing. Font size and panel width follow the **Text size** preference.
-- **Pinned items** — keep favorites at the top, immune from the history-size cap and the Clear button. Configurable max (default 20, up to 100). Hover a pinned row to reveal `↑` / `↓` buttons that move it within the pinned section (and shift its digit / letter shortcut along with it). Newly pinned items go to the bottom so your manual order isn't disturbed.
+- **Pinned items** — keep favorites at the top. Pins count toward the configured history size but are never evicted to enforce it, removed by Clear, or auto-expired. Configurable max (default 20, up to 100). Hover a pinned row to reveal `↑` / `↓` buttons that move it within the pinned section (and shift its digit / letter shortcut along with it). Newly pinned items go to the bottom so your manual order isn't disturbed.
 - **Keyboard-first** — global hotkey opens the panel, then `↑`/`↓` to navigate, `Return` to activate, `p` to pin/unpin, `/` to search, `Esc` to close.
 - **Pin shortcuts** — press `1`–`9` then `a`–`o`, `q`–`z` while the panel is open to instantly paste pinned items #1–#34. (`p` is reserved for pin/unpin.)
 - **Quick switcher HUD** — second hotkey (default `⌘⌥V`) pops a compact overlay anchored to the text caret of the focused field, showing your most-recent unpinned items. Press `1`–`N` (configurable 2–9) or the matching home-row letter (`a` / `s` / `d` / `f` / `g` / `h` / `j` / `k` / `l`) to paste — both labels are shown next to each row so neither requires memorization. `↑`/`↓` + `Return` for keyboard nav, `Shift`+key to invert plain-text mode for that paste, `Esc` to dismiss. Falls back to mouse cursor positioning when the focused app doesn't expose a text caret.
@@ -30,7 +30,7 @@ A fast, native macOS clipboard manager that lives in your menu bar. Captures tex
 - **Menu-bar context menu** — right-click the cauldron icon for Preferences or Quit.
 - **Launch at login** — toggle in Preferences.
 - **Auto-expire** — optional retention window (Off / 1h / 24h / 7d) automatically purges old unpinned items. Pinned items are never expired.
-- **App exclusions** — choose apps in Preferences whose copied items should never enter history.
+- **Sensitive-copy filtering** — items marked concealed by their source app are always skipped; app exclusions add a best-effort source-app filter.
 - **Local-only** — all history lives on your Mac; nothing is sent anywhere.
 
 ## Requirements
@@ -110,7 +110,7 @@ Open via the gear icon in the panel footer or by right-clicking the menu-bar ico
 - **Main Panel** — record the main-panel hotkey, auto-open on hover.
 - **Quick Switcher** — record the HUD hotkey, choose how many rows it shows (2–9). HUD positioning needs Accessibility (falls back to mouse cursor without it).
 - **Paste** — auto-paste on selection. The toggle is disabled when Accessibility permission is missing — the section header flags the requirement.
-- **Capture** — opt-in capture sound (Tink / Pop / Glass / Ping), plus the excluded-apps list (copied items from those apps never enter history).
+- **Capture** — opt-in capture sound (Tink / Pop / Glass / Ping), plus the best-effort excluded-apps list. Concealed pasteboard items are always skipped.
 - **History** — total history size (10–500), max pinned items (1–100), auto-expire window.
 
 The "Plain" chip in the panel footer toggles plain-text-only pasting for text items, stripping rich formatting and compacting runs of extra blank lines; hold `Shift` while activating (or pressing a digit shortcut) to invert it for a single paste.
@@ -120,7 +120,8 @@ The "Plain" chip in the panel footer toggles plain-text-only pasting for text it
 - Clipboard history is stored locally in a SQLite database at `~/Library/Application Support/CopyCauldron/history.db`.
 - Images are cached as PNG files in the same directory under `images/`.
 - Nothing is sent over the network. No telemetry.
-- **Excluded apps**: add password managers, browsers, or any other app in Preferences → Privacy to prevent copied items from that app from entering history. Browser extensions appear as their host browser, so excluding a password-manager extension means excluding that browser.
+- **Sensitive items**: CopyCauldron always skips pasteboard items explicitly marked concealed by their source app.
+- **Excluded apps**: add password managers, browsers, or other apps in Preferences → Capture for an additional best-effort filter. Because macOS doesn't attach a source app to clipboard changes, switching apps before CopyCauldron's next poll can change attribution. Browser extensions appear as their host browser.
 
 ## License
 

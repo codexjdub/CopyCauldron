@@ -259,9 +259,9 @@ final class ClipboardStore: ObservableObject {
     /// Writes the item back to the system pasteboard so the user can ⌘V.
     /// When `plainTextOnly` is true, attached RTF/HTML is skipped and excessive
     /// blank lines are compacted for pasting into plain-text editors.
-    func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool = false) {
+    @discardableResult
+    func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool = false) -> Bool {
         let pb = NSPasteboard.general
-        pb.clearContents()
         switch item.content {
         case .text(let s):
             let payload = TextPasteTransform.payload(
@@ -275,21 +275,25 @@ final class ClipboardStore: ObservableObject {
             var types: [NSPasteboard.PasteboardType] = [.string]
             if payload.rtfData != nil { types.append(.rtf) }
             if payload.htmlData != nil { types.append(.html) }
+            pb.clearContents()
             pb.declareTypes(types, owner: nil)
-            pb.setString(payload.string, forType: .string)
+            let wroteString = pb.setString(payload.string, forType: .string)
             if let rtfData = payload.rtfData { pb.setData(rtfData, forType: .rtf) }
             if let htmlData = payload.htmlData { pb.setData(htmlData, forType: .html) }
+            return wroteString
         case .image(let filename):
-            if let data = try? Data(contentsOf: imageURL(for: filename)),
-               let image = NSImage(data: data) {
-                pb.writeObjects([image])
-            }
+            guard let data = try? Data(contentsOf: imageURL(for: filename)),
+                  let image = NSImage(data: data) else { return false }
+            pb.clearContents()
+            return pb.writeObjects([image])
         case .fileURLs:
             let urls = item
                 .resolveAllFileURLs()
                 .filter(\.exists)
                 .map { $0.url as NSURL }
-            pb.writeObjects(urls)
+            guard !urls.isEmpty else { return false }
+            pb.clearContents()
+            return pb.writeObjects(urls)
         }
     }
 }

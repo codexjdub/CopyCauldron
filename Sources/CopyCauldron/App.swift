@@ -300,7 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func performPaste(_ item: ClipboardItem, invertPlainText: Bool = false) {
         let plainText = preferences.pastePlainTextOnly != invertPlainText
         let prev = previousFrontmostApp
-        copyToPasteboard(item, plainTextOnly: plainText)
+        guard copyToPasteboard(item, plainTextOnly: plainText) else {
+            presentPasteUnavailableAlert(for: item)
+            return
+        }
         if preferences.autoPaste {
             // Fresh token per paste — any older paste chain in flight
             // sees a mismatch on its next tick and abandons itself, so
@@ -376,22 +379,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    private func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool) {
+    private func copyToPasteboard(_ item: ClipboardItem, plainTextOnly: Bool) -> Bool {
         writeToPasteboard {
             store.copyToPasteboard(item, plainTextOnly: plainTextOnly)
         }
     }
 
     private func copyPathsToPasteboard(_ urls: [URL]) {
-        writeToPasteboard {
+        _ = writeToPasteboard {
+            let text = urls.map(\.path).joined(separator: "\n")
+            guard !text.isEmpty else { return false }
             let pb = NSPasteboard.general
             pb.clearContents()
-            pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+            return pb.setString(text, forType: .string)
         }
     }
 
-    private func writeToPasteboard(_ write: () -> Void) {
-        write()
-        monitor.suppressCurrentChangeCount()
+    private func writeToPasteboard(_ write: () -> Bool) -> Bool {
+        let didWrite = write()
+        if didWrite {
+            monitor.suppressCurrentChangeCount()
+        }
+        return didWrite
+    }
+
+    private func presentPasteUnavailableAlert(for item: ClipboardItem) {
+        let alert = NSAlert()
+        alert.messageText = "Clipboard Item Unavailable"
+        switch item.content {
+        case .fileURLs:
+            alert.informativeText = "The original file can no longer be found, so the clipboard was left unchanged."
+        case .image:
+            alert.informativeText = "The cached image can no longer be read, so the clipboard was left unchanged."
+        case .text:
+            alert.informativeText = "CopyCauldron couldn't write this item to the clipboard."
+        }
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }

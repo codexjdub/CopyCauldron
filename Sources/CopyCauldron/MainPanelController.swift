@@ -91,6 +91,7 @@ final class MainPanelController: NSObject, NSWindowDelegate {
             // Panel is on screen but another window came forward; the
             // user is asking for it back, so raise and key it.
             onBeforeShow?()
+            willActivate()
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
         } else {
@@ -183,8 +184,17 @@ final class MainPanelController: NSObject, NSWindowDelegate {
         hotKeySink = preferences.$hotKey
             .dropFirst()
             .sink { [weak self] newKey in
-                self?.hotKeyManager.register(newKey)
+                self?.registerChangedHotKey(newKey)
             }
+    }
+
+    private func registerChangedHotKey(_ hotKey: HotKey) {
+        guard !hotKeyManager.register(hotKey) else { return }
+        let restored = hotKeyManager.currentHotKey
+        if let restored {
+            preferences.hotKey = restored
+        }
+        presentHotKeyRegistrationFailure(attempted: hotKey, restored: restored)
     }
 
     private func setUpKeepPanelOpenSink() {

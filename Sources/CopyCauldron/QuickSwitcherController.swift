@@ -129,8 +129,17 @@ final class QuickSwitcherController {
         hotKeySink = preferences.$quickSwitcherHotKey
             .dropFirst()
             .sink { [weak self] newKey in
-                self?.hotKeyManager.register(newKey)
+                self?.registerChangedHotKey(newKey)
             }
+    }
+
+    private func registerChangedHotKey(_ hotKey: HotKey) {
+        guard !hotKeyManager.register(hotKey) else { return }
+        let restored = hotKeyManager.currentHotKey
+        if let restored {
+            preferences.quickSwitcherHotKey = restored
+        }
+        presentHotKeyRegistrationFailure(attempted: hotKey, restored: restored)
     }
 
     // MARK: – Show / activate
